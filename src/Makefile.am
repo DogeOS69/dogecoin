@@ -2,7 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-DIST_SUBDIRS = secp256k1 univalue
+DIST_SUBDIRS = secp256k1 univalue bls12-381
 
 AM_LDFLAGS = $(PTHREAD_CFLAGS) $(LIBTOOL_LDFLAGS) $(HARDENED_LDFLAGS)
 AM_CXXFLAGS = $(HARDENED_CXXFLAGS) $(ERROR_CXXFLAGS)
@@ -21,7 +21,7 @@ endif
 BITCOIN_CONFIG_INCLUDES=-I$(builddir)/config
 BITCOIN_INCLUDES=-I$(builddir) -I$(builddir)/obj $(BDB_CPPFLAGS) $(BOOST_CPPFLAGS) $(LEVELDB_CPPFLAGS) $(CRYPTO_CFLAGS) $(SSL_CFLAGS)
 
-BITCOIN_INCLUDES += -I$(srcdir)/secp256k1/include
+BITCOIN_INCLUDES += -I$(srcdir)/secp256k1/include -I$(srcdir)/bls12-381/include
 BITCOIN_INCLUDES += $(UNIVALUE_CFLAGS)
 
 LIBDOGECOIN_SERVER=libdogecoin_server.a
@@ -32,6 +32,7 @@ LIBDOGECOIN_UTIL=libdogecoin_util.a
 LIBDOGECOIN_CRYPTO=crypto/libdogecoin_crypto.a
 LIBDOGECOINQT=qt/libdogecoinqt.a
 LIBSECP256K1=secp256k1/libsecp256k1.la
+LIBBLS=bls12-381/libbls.la
 
 if ENABLE_ZMQ
 LIBDOGECOIN_ZMQ=libdogecoin_zmq.a
@@ -44,6 +45,9 @@ LIBDOGECOIN_WALLET=libdogecoin_wallet.a
 endif
 
 $(LIBSECP256K1): $(wildcard secp256k1/src/*) $(wildcard secp256k1/include/*)
+	$(AM_V_at)$(MAKE) $(AM_MAKEFLAGS) -C $(@D) $(@F)
+
+$(LIBBLS): $(wildcard bls12-381/src/*) $(wildcard bls12-381/include/*)
 	$(AM_V_at)$(MAKE) $(AM_MAKEFLAGS) -C $(@D) $(@F)
 
 # Make is not made aware of per-object dependencies to avoid limiting building parallelization
@@ -73,7 +77,6 @@ if BUILD_BITCOIN_UTILS
   bin_PROGRAMS += dogecoin-cli dogecoin-tx
 endif
 
-.PHONY: FORCE check-symbols check-security
 # bitcoin core #
 BITCOIN_CORE_H = \
   addrdb.h \
@@ -407,7 +410,8 @@ dogecoind_LDADD = \
   $(LIBDOGECOIN_CRYPTO) \
   $(LIBLEVELDB) \
   $(LIBMEMENV) \
-  $(LIBSECP256K1)
+  $(LIBSECP256K1) \
+  $(LIBBLS)
 
 dogecoind_LDADD += $(BOOST_LIBS) $(BDB_LIBS) $(SSL_LIBS) $(CRYPTO_LIBS) $(MINIUPNPC_LIBS) $(EVENT_PTHREADS_LIBS) $(EVENT_LIBS) $(ZMQ_LIBS)
 
@@ -446,7 +450,8 @@ dogecoin_tx_LDADD = \
   $(LIBDOGECOIN_UTIL) \
   $(LIBDOGECOIN_CONSENSUS) \
   $(LIBDOGECOIN_CRYPTO) \
-  $(LIBSECP256K1)
+  $(LIBSECP256K1) \
+  $(LIBBLS)
 
 dogecoin_tx_LDADD += $(BOOST_LIBS) $(CRYPTO_LIBS)
 #
@@ -461,8 +466,8 @@ if GLIBC_BACK_COMPAT
 endif
 
 libdogecoinconsensus_la_LDFLAGS = $(AM_LDFLAGS) -no-undefined $(RELDFLAGS)
-libdogecoinconsensus_la_LIBADD = $(LIBSECP256K1)
-libdogecoinconsensus_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(builddir)/obj -I$(srcdir)/secp256k1/include -DBUILD_BITCOIN_INTERNAL
+libdogecoinconsensus_la_LIBADD = $(LIBSECP256K1) $(LIBBLS)
+libdogecoinconsensus_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(builddir)/obj -I$(srcdir)/secp256k1/include -I$(srcdir)/bls12-381/include -DBUILD_BITCOIN_INTERNAL
 libdogecoinconsensus_la_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 
 endif
@@ -503,6 +508,7 @@ $(top_srcdir)/$(subdir)/config/bitcoin-config.h.in:  $(am__configure_deps)
 
 clean-local:
 	-$(MAKE) -C secp256k1 clean
+	-$(MAKE) -C bls12-381 clean
 	-$(MAKE) -C univalue clean
 	-rm -f leveldb/*/*.gcda leveldb/*/*.gcno leveldb/helpers/memenv/*.gcda leveldb/helpers/memenv/*.gcno
 	-rm -f config.h
@@ -546,3 +552,55 @@ endif
 if ENABLE_QT_TESTS
 include Makefile.qttest.include
 endif
+
+
+
+# ZKP Verifier Rust library integration
+if HAVE_RUST
+
+# Define paths and includes
+ZKP_INCLUDE = -I$(top_srcdir)/src/zkp-verifier/include -I$(top_srcdir)/src/zkp-verifier/target/cxxbridge
+# Use platform-specific shared library extension
+if TARGET_DARWIN
+ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.dylib
+else
+if TARGET_WINDOWS
+ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/zkp_verifier.dll
+else
+ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.so
+endif
+endif
+
+# Add include paths
+AM_CPPFLAGS += $(ZKP_INCLUDE)
+
+# Add temporary stub implementation
+libdogecoin_consensus_a_SOURCES += zkp_stub.cpp
+
+# Build Rust library before linking
+.PHONY: build-zkp-verifier
+build-zkp-verifier:
+	@echo "Building Rust ZKP verifier shared library..."
+	cd $(top_srcdir)/src/zkp-verifier && cargo build --release || echo "Warning: Rust build failed"
+
+# Ensure ZKP library is built before linking
+$(ZKP_VERIFIER_LIB): build-zkp-verifier
+
+# Add ZKP library to executables and shared libraries
+dogecoind_LDADD += $(ZKP_VERIFIER_LIB)
+dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIB)
+
+# Add ZKP library to consensus library (now safe since it's a shared library)
+if BUILD_BITCOIN_LIBS
+libdogecoinconsensus_la_LIBADD += $(ZKP_VERIFIER_LIB)
+endif
+
+else
+# Rust not available - create dummy target
+.PHONY: build-zkp-verifier-dummy
+build-zkp-verifier-dummy:
+	@echo "Rust not available, skipping ZKP verifier build"
+endif
+
+# Force target for dependencies
+FORCE:

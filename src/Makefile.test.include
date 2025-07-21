@@ -159,7 +159,7 @@ if ENABLE_WALLET
 test_test_dogecoin_LDADD += $(LIBDOGECOIN_WALLET)
 endif
 
-test_test_dogecoin_LDADD += $(LIBDOGECOIN_CONSENSUS) $(BDB_LIBS) $(SSL_LIBS) $(CRYPTO_LIBS) $(MINIUPNPC_LIBS)
+test_test_dogecoin_LDADD += $(LIBDOGECOIN_CONSENSUS) $(BDB_LIBS) $(SSL_LIBS) $(CRYPTO_LIBS) $(MINIUPNPC_LIBS) $(LIBBLS)
 test_test_dogecoin_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(LIBTOOL_APP_LDFLAGS) -static
 
 if ENABLE_ZMQ
@@ -180,7 +180,8 @@ test_test_dogecoin_fuzzy_LDADD = \
   $(LIBDOGECOIN_UTIL) \
   $(LIBDOGECOIN_CONSENSUS) \
   $(LIBDOGECOIN_CRYPTO) \
-  $(LIBSECP256K1)
+  $(LIBSECP256K1) \
+  $(LIBBLS)
 
 test_test_dogecoin_fuzzy_LDADD += $(BOOST_LIBS) $(CRYPTO_LIBS)
 #

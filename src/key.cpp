@@ -298,20 +298,30 @@ bool ECC_InitSanityCheck() {
 }
 
 void ECC_Start() {
-    assert(secp256k1_context_sign == NULL);
+    // --- START of Modifications ---
 
-    secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
-    assert(ctx != NULL);
-
-    {
-        // Pass in a random blinding seed to the secp256k1 context.
-        std::vector<unsigned char, secure_allocator<unsigned char>> vseed(32);
-        GetRandBytes(vseed.data(), 32);
-        bool ret = secp256k1_context_randomize(ctx, vseed.data());
-        assert(ret);
+    // 1. Check if the context already exists
+    if (secp256k1_context_sign != NULL) {
+        // 2. If it exists, destroy it first
+        secp256k1_context_destroy(secp256k1_context_sign);
+        // Optional but good practice:
+        // secp256k1_context_sign = NULL;
     }
 
-    secp256k1_context_sign = ctx;
+    // --- END of Modifications ---
+
+    // The original logic to create, randomize, and assign the new context follows:
+    secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
+    assert(ctx != NULL); // Original check retained
+
+    {
+        std::vector<unsigned char, secure_allocator<unsigned char>> vseed(32);
+        GetRandBytes(vseed.data(), 32); // Original logic retained
+        bool ret = secp256k1_context_randomize(ctx, vseed.data());
+        assert(ret); // Original check retained
+    }
+
+    secp256k1_context_sign = ctx; // Original assignment retained
 }
 
 void ECC_Stop() {

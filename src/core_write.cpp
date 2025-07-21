@@ -23,34 +23,22 @@ std::string FormatScript(const CScript& script)
     std::string ret;
     CScript::const_iterator it = script.begin();
     opcodetype op;
+    std::vector<unsigned char> vch;
     while (it != script.end()) {
-        CScript::const_iterator it2 = it;
-        std::vector<unsigned char> vch;
-        if (script.GetOp2(it, op, &vch)) {
-            if (op == OP_0) {
-                ret += "0 ";
-                continue;
-            } else if ((op >= OP_1 && op <= OP_16) || op == OP_1NEGATE) {
-                ret += strprintf("%i ", op - OP_1NEGATE - 1);
-                continue;
-            } else if (op >= OP_NOP && op <= OP_NOP10) {
-                std::string str(GetOpName(op));
-                if (str.substr(0, 3) == std::string("OP_")) {
-                    ret += str.substr(3, std::string::npos) + " ";
-                    continue;
-                }
-            }
-            if (vch.size() > 0) {
-                ret += strprintf("0x%x 0x%x ", HexStr(it2, it - vch.size()), HexStr(it - vch.size(), it));
-            } else {
-                ret += strprintf("0x%x ", HexStr(it2, it));
-            }
-            continue;
+        if (!script.GetOp(it, op, vch))
+            break;
+        if (!vch.empty()) {
+            // push-data: emit "0x..." token
+            ret += "0x" + HexStr(vch);
+        } else {
+            // opcode: emit its name
+            // GetOpName returns const char*, so build a std::string
+            ret += std::string(GetOpName(op));
         }
-        ret += strprintf("0x%x ", HexStr(it2, script.end()));
-        break;
+        ret += " ";
     }
-    return ret.substr(0, ret.size() - 1);
+    if (!ret.empty()) ret.pop_back();
+    return ret;
 }
 
 const std::map<unsigned char, std::string> mapSigHashTypes =

@@ -87,6 +87,12 @@ const char* ScriptErrorString(const ScriptError serror)
             return "Witness provided for non-witness script";
         case SCRIPT_ERR_WITNESS_PUBKEYTYPE:
             return "Using non-compressed keys in segwit";
+        case SCRIPT_ERR_ZKP_VERIFY_FAILED:
+            return "Zero-knowledge proof verification failed";
+        case SCRIPT_ERR_ZKP_DESERIALIZE_FAILED:
+            return "Failed to deserialize ZK proof data";
+        case SCRIPT_ERR_ZKP_UNKNOWN_MODE:
+            return "Unknown ZK proof mode";
         case SCRIPT_ERR_UNKNOWN_ERROR:
         case SCRIPT_ERR_ERROR_COUNT:
         default: break;

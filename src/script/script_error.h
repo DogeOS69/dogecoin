@@ -64,6 +64,16 @@ typedef enum ScriptError_t
     SCRIPT_ERR_WITNESS_UNEXPECTED,
     SCRIPT_ERR_WITNESS_PUBKEYTYPE,
 
+    /* Zero-Knowledge Proof errors */
+    SCRIPT_ERR_ZKP_VERIFY_FAILED,              // General verification failure
+    SCRIPT_ERR_ZKP_UNKNOWN_MODE,               // Unknown ZKP mode
+    SCRIPT_ERR_ZKP_DESERIALIZE_FAILED,         // Failed to deserialize ZKP data
+    SCRIPT_ERR_ZKP_TOO_MANY_INPUTS,            // Too many public inputs
+    SCRIPT_ERR_ZKP_PROOF_TOO_LARGE,            // Proof size exceeds limit
+    SCRIPT_ERR_ZKP_VERIFIER_KEY_TOO_LARGE,     // Verifier key size exceeds limit
+    SCRIPT_ERR_ZKP_INVALID_INPUT_FORMAT,       // Invalid public input format
+    SCRIPT_ERR_ZKP_INVALID_INPUT_COUNT,        // Invalid public input count
+    
     SCRIPT_ERR_ERROR_COUNT
 } ScriptError;
 

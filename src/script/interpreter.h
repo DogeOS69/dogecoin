@@ -133,6 +133,11 @@ public:
         return false;
     }
 
+    virtual bool GetSigHash(int nHashType, const CScript& scriptCode, SigVersion sigversion, uint256 * sighashOut) const
+    {
+        return false;
+    }
+
     virtual bool CheckLockTime(const CScriptNum& nLockTime) const
     {
          return false;
@@ -163,6 +168,7 @@ public:
     bool CheckSig(const std::vector<unsigned char>& scriptSig, const std::vector<unsigned char>& vchPubKey, const CScript& scriptCode, SigVersion sigversion) const;
     bool CheckLockTime(const CScriptNum& nLockTime) const;
     bool CheckSequence(const CScriptNum& nSequence) const;
+    bool GetSigHash(int nHashType, const CScript& scriptCode, SigVersion sigversion, uint256 * sighashOut) const;
 };
 
 class MutableTransactionSignatureChecker : public TransactionSignatureChecker

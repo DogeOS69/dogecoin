@@ -30,6 +30,7 @@
 #include <boost/assign/list_of.hpp>
 
 static bool fCreateBlank;
+static bool fAllowAllOpCodes = false;
 static std::map<std::string,UniValue> registers;
 static const int CONTINUE_EXECUTION=-1;
 
@@ -53,6 +54,7 @@ static int AppInitRawTx(int argc, char* argv[])
     }
 
     fCreateBlank = GetBoolArg("-create", false);
+    fAllowAllOpCodes = GetBoolArg("-allowallopcodes", false);
 
     if (argc<2 || IsArgSet("-?") || IsArgSet("-h") || IsArgSet("-help"))
     {
@@ -70,6 +72,7 @@ static int AppInitRawTx(int argc, char* argv[])
         strUsage += HelpMessageOpt("-create", _("Create new, empty TX."));
         strUsage += HelpMessageOpt("-json", _("Select JSON output"));
         strUsage += HelpMessageOpt("-txid", _("Output only the hex-encoded transaction id of the resultant transaction."));
+        strUsage += HelpMessageOpt("-allowallopcodes", _("Allow all opcodes, including potentially dangerous ones"));
         AppendParamsHelpMessages(strUsage);
 
         fprintf(stdout, "%s", strUsage.c_str());
@@ -416,7 +419,7 @@ static void MutateTxAddOutScript(CMutableTransaction& tx, const std::string& str
 
     // extract and validate script
     std::string strScript = vStrInputParts[1];
-    CScript scriptPubKey = ParseScript(strScript);
+    CScript scriptPubKey = ParseScript(strScript, fAllowAllOpCodes);
 
     // Extract FLAGS
     bool bSegWit = false;

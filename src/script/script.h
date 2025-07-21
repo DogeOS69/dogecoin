@@ -175,7 +175,8 @@ enum opcodetype
     OP_NOP7 = 0xb6,
     OP_NOP8 = 0xb7,
     OP_NOP9 = 0xb8,
-    OP_NOP10 = 0xb9,
+    OP_CHECKZKP = 0xb9,
+    OP_NOP10 = OP_CHECKZKP,
 
 
     // template matching params

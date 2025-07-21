@@ -1266,6 +1266,7 @@ fi
 
 ac_configure_args="${ac_configure_args} --disable-shared --with-pic --with-bignum=no --enable-module-recovery"
 AC_CONFIG_SUBDIRS([src/secp256k1])
+AC_CONFIG_SUBDIRS([src/bls12-381])
 
 AC_OUTPUT
 
@@ -1322,3 +1323,26 @@ echo "  CXX           = $CXX"
 echo "  CXXFLAGS      = $CXXFLAGS"
 echo "  LDFLAGS       = $LDFLAGS"
 echo
+
+
+# Check for Rust toolchain (needed for ZKP verifier)
+AC_PATH_PROG(CARGO, cargo)
+AS_IF([test "x$CARGO" = "x"],
+    [AC_MSG_WARN([Rust cargo not found. ZKP functionality will be disabled.])])
+
+if test "x$CARGO" != "x"; then
+    AC_PATH_PROG(RUSTC, rustc)
+    AS_IF([test "x$RUSTC" = "x"],
+        [AC_MSG_WARN([Rust compiler not found. ZKP functionality will be disabled.])])
+    
+    if test "x$RUSTC" != "x"; then
+        # Check minimum Rust version (1.70.0)
+        RUST_VERSION=`$RUSTC --version | sed -n 's/^rustc \([[0-9]]*\.[[0-9]]*\.[[0-9]]*\).*/\1/p'`
+        AC_MSG_CHECKING([Rust version])
+        AC_MSG_RESULT([$RUST_VERSION])
+        # Note: We'll warn but not fail if version is too old
+    fi
+fi
+
+# Define conditional for Rust availability
+AM_CONDITIONAL([HAVE_RUST], [test "x$CARGO" != "x" && test "x$RUSTC" != "x"])

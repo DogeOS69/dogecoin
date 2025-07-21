@@ -24,6 +24,7 @@ bench_bench_dogecoin_SOURCES = \
   bench/lockedpool.cpp \
   bench/perf.cpp \
   bench/perf.h \
+  bench/verify_script.cpp \
   bench/scrypt.cpp
 
 # bench_bench_dogecoin_SOURCES_DISABLED = \
@@ -43,7 +44,8 @@ bench_bench_dogecoin_LDADD = \
   $(LIBLEVELDB) \
   $(LIBMEMENV) \
   $(LIBSECP256K1) \
-  $(LIBUNIVALUE)
+  $(LIBUNIVALUE) \
+  $(LIBBLS)
 
 if ENABLE_ZMQ
 bench_bench_dogecoin_LDADD += $(LIBDOGECOIN_ZMQ) $(ZMQ_LIBS)
