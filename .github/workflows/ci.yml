@@ -15,7 +15,7 @@ jobs:
     name: ${{ matrix.name }}
 
     env:
-      MAKEJOBS: "-j3"
+      MAKEJOBS: "-j2"
       CHECK_DOC: "0"
       CCACHE_SIZE: "100M"
       CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -226,6 +226,9 @@ jobs:
                pkg-config bsdmainutils curl ca-certificates ccache rsync git \
                procps bison python3 python3-pip python3-setuptools python3-wheel
           apt-get install -y ${{ matrix.packages }}
+          # Install Node.js 18.x for GitHub Actions compatibility
+          curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+          apt-get install -y nodejs
           python3 -m pip install setuptools==70.3.0 --upgrade
           python3 -m pip install lief
 
@@ -235,6 +238,12 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          . $HOME/.cargo/env
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: SDK cache
         if: ${{ matrix.sdk }}
@@ -267,7 +276,17 @@ jobs:
 
       - name: Build depends
         run: |
-          make $MAKEJOBS -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
+          # Use single-threaded make in act/Docker to avoid jobserver issues
+          if [ "$ACT" = "true" ]; then
+            make -j1 -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
+          else
+            make $MAKEJOBS -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
+          fi
+
+      - name: Build ZKP verifier
+        run: |
+          . $HOME/.cargo/env
+          ./build-zkp-rust.sh
 
       - name: CCache
         uses: actions/cache@v4
