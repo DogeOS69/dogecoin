@@ -1078,9 +1078,9 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                     // Retrieve the mode from the top of the stack
                     CScriptNum mode(stacktop(-1), fRequireMinimal);
 
-                    // Following DIP-0069: Mode 0 is Groth16 on BLS12-381
+                    // Following DIP-XXXX: Mode 0 is Groth16 on BLS12-381
                     if(mode.getint() == ZKPMode::GROTH16) {
-                        // Required stack items per DIP-0069 layout:
+                        // Required stack items per DIP-XXXX layout:
                         // 8 proof items + 2 public inputs + 6 VK chunks + 1 mode
                         const size_t proofItems = 8;
                         const size_t publicInputs = 2;
@@ -1090,7 +1090,7 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                         if (stack.size() < totalNeeded)
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
 
-                        // Get proof components according to DIP-0069 stack layout
+                        // Get proof components according to DIP-XXXX stack layout
                         valtype& piA_x = stacktop(-1 - proofItems - publicInputs - vkChunks);
                         valtype& piA_y = stacktop(-1 - proofItems - publicInputs - vkChunks + 1);
                         valtype& piB_x0 = stacktop(-1 - proofItems - publicInputs - vkChunks + 2);
@@ -1162,7 +1162,7 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                             return set_error(serror, SCRIPT_ERR_ZKP_VERIFY_FAILED);
                         }
 
-                        // Success case: leave stack unchanged as per DIP-0069
+                        // Success case: leave stack unchanged as per DIP-XXXX
                     }
                     else if (mode.getint() == 1) // PLONK/Halo2 + KZG on BN256
                     {

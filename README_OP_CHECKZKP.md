@@ -4,7 +4,7 @@
 
 This document summarizes the integration of zero-knowledge proof verification capabilities into Dogecoin Core through the new `OP_CHECKZKP` opcode. This implementation leverages Rust's memory-safe cryptographic libraries while maintaining seamless compatibility with Dogecoin's C++ codebase.
 
-The implementation follows DIP-0069, supporting two verification modes:
+The implementation follows DIP-XXXX, supporting two verification modes:
 - **Mode 0**: Groth16 proofs on the BLS12-381 curve
 - **Mode 1**: PLONK proofs with Halo2/KZG on the BN256 curve
 
@@ -26,7 +26,7 @@ The ZK-SNARK verification system was implemented with three main components:
 
 3. **Script Interpreter Modifications** (`src/script/interpreter.cpp`)
    - Implements the `OP_CHECKZKP` opcode (reusing the unused `OP_NOP10` opcode 0xB9)
-   - Parses the script stack according to DIP-0069 specification
+   - Parses the script stack according to DIP-XXXX specification
    - Calls the appropriate verification function based on the mode
 
 ### 1.2 Verification Flow
@@ -55,7 +55,7 @@ The implementation handles transactions containing `OP_CHECKZKP` as follows:
   - `src/verifier.rs`: Verification implementations for both proof systems
 
 - **`src/zkp_stub.cpp`** - Provides weak symbol implementations of verification functions
-  
+
 - **`build-zkp-rust.sh`** - Helper script to build the Rust library and set up the integration
 
 ### 2.2 Modified Files
@@ -71,7 +71,7 @@ The implementation handles transactions containing `OP_CHECKZKP` as follows:
 
 - **`src/script/interpreter.cpp`** - Implemented the `OP_CHECKZKP` opcode
   - Added case handling for both verification modes
-  - Implemented stack parsing according to DIP-0069
+  - Implemented stack parsing according to DIP-XXXX
   - Added error codes for ZKP verification failures
 
 - **`src/script/script.h`** and **`src/script/script.cpp`** - Updated opcode definitions
@@ -154,4 +154,4 @@ When working on the ZKP verification functionality:
 
 ## 5. References
 
-- [DIP-0069: OP_CHECKZKP](https://github.com/DogeOS69/DIP-0069/blob/main/dip-0069.mediawiki)
+- [DIP-XXXX: OP_CHECKZKP](https://github.com/DogeOS69/DIP-OP_CHECKZKP/blob/main/dip-xxxx.mediawiki)
