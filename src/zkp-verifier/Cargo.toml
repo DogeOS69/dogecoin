@@ -30,3 +30,7 @@ lto = "thin"
 codegen-units = 1
 opt-level = 3
 panic = "abort"
+
+# Windows-specific linking configuration to avoid unwind issues
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["processenv", "winbase"] }

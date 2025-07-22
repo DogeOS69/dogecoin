@@ -566,7 +566,7 @@ if TARGET_DARWIN
 ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.dylib
 else
 if TARGET_WINDOWS
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/zkp_verifier.dll
+ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.a
 else
 ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.so
 endif

@@ -43,7 +43,7 @@ if [ -n "${CARGO_BUILD_TARGET}" ]; then
       ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/libzkp_verifier.dylib"
       ;;
     *-windows-*)
-      ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/zkp_verifier.dll"
+      ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/libzkp_verifier.a"
       ;;
     *)
       ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/libzkp_verifier.so"
@@ -63,18 +63,23 @@ if [ -n "${CARGO_BUILD_TARGET}" ]; then
   NATIVE_DIR="${ZKP_DIR}/target/release"
   mkdir -p "${NATIVE_DIR}"
 
-  case "${CARGO_BUILD_TARGET}" in
-    *-apple-darwin)
-      ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.dylib" "${NATIVE_DIR}/libzkp_verifier.dylib"
-      ;;
-    *-windows-*)
-      ln -sf "../${CARGO_BUILD_TARGET}/release/zkp_verifier.dll" "${NATIVE_DIR}/zkp_verifier.dll"
-      ;;
-    *)
-      ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.so" "${NATIVE_DIR}/libzkp_verifier.so"
-      ;;
-  esac
-  info "Created symlink for cross-compiled library"
+  # Verify the cross-compiled library exists before creating symlink
+  if [ -f "${ZKP_LIB}" ]; then
+    case "${CARGO_BUILD_TARGET}" in
+      *-apple-darwin)
+        ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.dylib" "${NATIVE_DIR}/libzkp_verifier.dylib"
+        ;;
+      *-windows-*)
+        ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.a" "${NATIVE_DIR}/libzkp_verifier.a"
+        ;;
+      *)
+        ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.so" "${NATIVE_DIR}/libzkp_verifier.so"
+        ;;
+    esac
+    info "Created symlink for cross-compiled library: ${ZKP_LIB} -> ${NATIVE_DIR}"
+  else
+    error "Cross-compiled library not found: ${ZKP_LIB}"
+  fi
 fi
 
 # Create wrapper header file for simplified C++ interface

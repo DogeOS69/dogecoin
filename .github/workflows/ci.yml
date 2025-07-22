@@ -276,11 +276,7 @@ jobs:
 
       - name: Build depends
         run: |
-          if [ "$ACT" = "true" ]; then
-            make -j1 -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
-          else
-            make $MAKEJOBS -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
-          fi
+          make $MAKEJOBS -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
 
       - name: Build ZKP verifier
         run: |
@@ -312,6 +308,7 @@ jobs:
               export CC_i686_pc_windows_gnu=i686-w64-mingw32-gcc
               export CXX_i686_pc_windows_gnu=i686-w64-mingw32-g++
               export CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=i686-w64-mingw32-gcc
+              export RUSTFLAGS="-C panic=abort"
               ;;
             x86_64-w64-mingw32)
               rustup target add x86_64-pc-windows-gnu
@@ -319,10 +316,15 @@ jobs:
               export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
               export CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++
               export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+              export RUSTFLAGS="-C panic=abort"
               ;;
             x86_64-apple-darwin*)
               rustup target add x86_64-apple-darwin
               export CARGO_BUILD_TARGET=x86_64-apple-darwin
+              export CC=clang
+              export CXX=clang++
+              export CXX_x86_64_apple_darwin=clang++
+              export BINDGEN_EXTRA_CLANG_ARGS="-target x86_64-apple-darwin11 -mmacosx-version-min=10.11"
               ;;
             x86_64-unknown-linux-gnu|x86_64-linux-gnu)
               # Native x86_64 Linux - no cross-compilation needed
