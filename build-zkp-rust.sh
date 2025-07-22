@@ -34,7 +34,24 @@ info "Building Rust ZKP verification library..."
 
 # Build Rust library
 cd "${ZKP_DIR}"
-cargo build --release || error "Rust build failed"
+if [ -n "${CARGO_BUILD_TARGET}" ]; then
+  info "Cross-compiling for target: ${CARGO_BUILD_TARGET}"
+  cargo build --release --target "${CARGO_BUILD_TARGET}" || error "Rust cross-compilation failed"
+  # Update library path for cross-compilation with correct extension
+  case "${CARGO_BUILD_TARGET}" in
+    *-apple-darwin)
+      ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/libzkp_verifier.dylib"
+      ;;
+    *-windows-*)
+      ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/zkp_verifier.dll"
+      ;;
+    *)
+      ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/libzkp_verifier.so"
+      ;;
+  esac
+else
+  cargo build --release || error "Rust build failed"
+fi
 
 # Check if static library was generated
 if [ ! -f "${ZKP_LIB}" ]; then
@@ -59,8 +76,8 @@ extern "C" {
 bool verify_plonk_halo2_kzg_bn256_simple(
     const uint8_t* proof_data, size_t proof_len,
     const uint8_t* vk_data, size_t vk_len,
-    const uint8_t* const* public_inputs, 
-    const size_t* input_lengths, 
+    const uint8_t* const* public_inputs,
+    const size_t* input_lengths,
     size_t input_count
 );
 
