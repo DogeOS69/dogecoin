@@ -103,7 +103,7 @@ bool static IsCompressedPubKey(const valtype &vchPubKey) {
  * Where R and S are not negative (their first byte has its highest bit not set), and not
  * excessively padded (do not start with a 0 byte, unless an otherwise negative number follows,
  * in which case a single 0 byte is necessary and even required).
- * 
+ *
  * See https://bitcointalk.org/index.php?topic=8392.msg127623#msg127623
  *
  * This function is consensus-critical since BIP66.
@@ -143,7 +143,7 @@ bool static IsValidSignatureEncoding(const std::vector<unsigned char> &sig) {
     // Verify that the length of the signature matches the sum of the length
     // of the elements.
     if ((size_t)(lenR + lenS + 7) != sig.size()) return false;
- 
+
     // Check whether the R element is an integer.
     if (sig[2] != 0x02) return false;
 
@@ -246,9 +246,9 @@ bool static CheckMinimalPush(const valtype& data, opcodetype opcode) {
     return true;
 }
 
-enum ZKPMode : uint32_t { 
-    GROTH16 = 0, 
-    PLONK_HALO2_KZG_BN256 = 1 
+enum ZKPMode : uint32_t {
+    GROTH16 = 0,
+    PLONK_HALO2_KZG_BN256 = 1
 };
 
 // Constants for Mode 1 (PLONK/Halo2)
@@ -267,13 +267,13 @@ inline std::vector<const uint8_t*> ConvertInputsToFFIFormat(const std::vector<va
 }
 
 #include "zkp-verifier/include/zkp_verifier_wrapper.h"
-// ZKP 验证函数的简化 C 接口声明
+// Simplified C interface declaration for ZKP verification function
 extern "C" {
     bool verify_plonk_halo2_kzg_bn256_simple(
         const uint8_t* proof_data, size_t proof_len,
         const uint8_t* vk_data, size_t vk_len,
-        const uint8_t* const* public_inputs, 
-        const size_t* input_lengths, 
+        const uint8_t* const* public_inputs,
+        const size_t* input_lengths,
         size_t input_count
     );
 }
@@ -902,7 +902,7 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                     popstack(stack);
                     stack.push_back(vchHash);
                 }
-                break;                                   
+                break;
 
                 case OP_CODESEPARATOR:
                 {
@@ -1070,14 +1070,14 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                     {
                         zkpOpIsUsed = true;
                     }
-                    
+
                     // Ensure at least mode is present
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
 
                     // Retrieve the mode from the top of the stack
                     CScriptNum mode(stacktop(-1), fRequireMinimal);
-                    
+
                     // Following DIP-0069: Mode 0 is Groth16 on BLS12-381
                     if(mode.getint() == ZKPMode::GROTH16) {
                         // Required stack items per DIP-0069 layout:
@@ -1086,10 +1086,10 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                         const size_t publicInputs = 2;
                         const size_t vkChunks = 6;
                         const size_t totalNeeded = proofItems + publicInputs + vkChunks + 1; // +1 for mode
-                        
+
                         if (stack.size() < totalNeeded)
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                            
+
                         // Get proof components according to DIP-0069 stack layout
                         valtype& piA_x = stacktop(-1 - proofItems - publicInputs - vkChunks);
                         valtype& piA_y = stacktop(-1 - proofItems - publicInputs - vkChunks + 1);
@@ -1099,11 +1099,11 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                         valtype& piB_y1 = stacktop(-1 - proofItems - publicInputs - vkChunks + 5);
                         valtype& piC_x = stacktop(-1 - proofItems - publicInputs - vkChunks + 6);
                         valtype& piC_y = stacktop(-1 - proofItems - publicInputs - vkChunks + 7);
-                        
+
                         // Get public inputs
                         valtype& public_input_0 = stacktop(-1 - publicInputs - vkChunks);
                         valtype& public_input_1 = stacktop(-1 - publicInputs - vkChunks + 1);
-                        
+
                         // Get verifier key components
                         valtype& verfierDataA = stacktop(-1 - vkChunks);
                         valtype& verfierDataB = stacktop(-1 - vkChunks + 1);
@@ -1111,71 +1111,71 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                         valtype& verfierDataD = stacktop(-1 - vkChunks + 3);
                         valtype& verfierDataE = stacktop(-1 - vkChunks + 4);
                         valtype& verfierDataF = stacktop(-1 - vkChunks + 5);
-                        
+
                         // Use the existing QED implementation for actual verification
                         bls12_381_groth16::Groth16ProofWith2PublicInputs proof;
                         static bls12_381_groth16::Groth16VerifierKeyInput vk;
                         static bls12_381_groth16::Groth16VerifierKeyPrecomputedValues precomputed;
                         static valtype verfierDataACopy;
-                        
+
                         // Reconstruct proof from components
                         // Note: QED implementation expects different parameters, need to adapt
                         valtype piA;
                         piA.insert(piA.end(), piA_x.begin(), piA_x.end());
                         piA.insert(piA.end(), piA_y.begin(), piA_y.end());
-                        
+
                         valtype piB0 = piB_x0;
                         valtype piB1 = piB_x1;
-                        
+
                         valtype piC;
                         piC.insert(piC.end(), piC_x.begin(), piC_x.end());
                         piC.insert(piC.end(), piC_y.begin(), piC_y.end());
-                        
+
                         // Deserialize the proof
                         if(!bls12_381_groth16::deserializeProofWith2PublicInputs(
                             &proof, &piA, &piB0, &piB1, &piC, &public_input_0, &public_input_1)) {
                             return set_error(serror, SCRIPT_ERR_ZKP_DESERIALIZE_FAILED);
                         }
-                        
+
                         // Verifier key handling with caching for efficiency
-                        if (verfierDataA.size() != verfierDataACopy.size() || 
+                        if (verfierDataA.size() != verfierDataACopy.size() ||
                             !std::equal(verfierDataA.begin(), verfierDataACopy.begin(), verfierDataACopy.end())) {
-                            
+
                             verfierDataACopy = verfierDataA;
                             if(!bls12_381_groth16::deserializeVerifierKeyInput(
-                                &vk, &verfierDataA, &verfierDataB, &verfierDataC, 
+                                &vk, &verfierDataA, &verfierDataB, &verfierDataC,
                                 &verfierDataD, &verfierDataE, &verfierDataF)) {
                                 return set_error(serror, SCRIPT_ERR_ZKP_DESERIALIZE_FAILED);
                             }
-                            
+
                             // Precompute the verifier key
                             if(!bls12_381_groth16::precomputeVerifierKey(&precomputed, &vk)) {
                                 return set_error(serror, SCRIPT_ERR_ZKP_DESERIALIZE_FAILED);
                             }
                         }
-                        
+
                         // Verify the proof
                         int fSuccess = bls12_381_groth16::verifyProofWith2PublicInputs(&proof, &vk, &precomputed);
-                        
+
                         // Check the result of the verification
                         if(!fSuccess) {
                             return set_error(serror, SCRIPT_ERR_ZKP_VERIFY_FAILED);
                         }
-                        
+
                         // Success case: leave stack unchanged as per DIP-0069
-                    } 
-                    else if (mode.getint() == 1) { // PLONK/Halo2 + KZG on BN256
-                        // 1. 定义并检查共识限制
+                    }
+                                        else if (mode.getint() == 1) { // PLONK/Halo2 + KZG on BN256
+                        // 1. Define and check consensus limits
                         const size_t MAX_ZKP_PROOF_SIZE = 4096;     // 4 KB
                         const size_t MAX_ZKP_VK_SIZE = 8192;        // 8 KB
                         const size_t MAX_ZKP_PUBLIC_INPUTS_COUNT = 64;
-                        
-                        // 2. 确保堆栈有足够的元素（至少有 mode, proof, vk, 公共输入数量）
+
+                        // 2. Ensure the stack has enough elements (at least mode, proof, vk, number of public inputs)
                         if (stack.size() < 4) {
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
-                        
-                        // 3. 从堆栈上获取公共输入数量
+
+                        // 3. Get the number of public inputs from the stack
                         CScriptNum nPublicInputs(stacktop(-3), fRequireMinimal);
                         if (nPublicInputs.getint() < 0) {
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -1183,54 +1183,54 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                         int32_t publicInputCount = nPublicInputs.getint();
                         if (publicInputCount > static_cast<int32_t>(MAX_ZKP_PUBLIC_INPUTS_COUNT)) {
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                        }
-                        
-                        // 4. 确保堆栈有足够的元素，包括所有公共输入
+                                                }
+
+                        // 4. Ensure the stack has enough elements, including all public inputs
                         if (stack.size() < static_cast<unsigned int>(3 + 1 + publicInputCount)) {
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
-                        
-                        // 5. 获取证明和验证密钥
+
+                        // 5. Get the proof and verification key
                         valtype& proof_bytes = stacktop(-2);
                         valtype& vk_bytes = stacktop(-4);
-                        
-                        // 6. 检查大小约束
+
+                        // 6. Check size constraints
                         if (proof_bytes.size() > MAX_ZKP_PROOF_SIZE || vk_bytes.size() > MAX_ZKP_VK_SIZE) {
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                        }
-                        
-                        // 7. 收集公共输入
+                                                }
+
+                        // 7. Collect public inputs
                         std::vector<const uint8_t*> publicInputsPointers;
                         std::vector<size_t> publicInputsLengths;
                         publicInputsPointers.reserve(publicInputCount);
                         publicInputsLengths.reserve(publicInputCount);
-                        
+
                         for (int i = 0; i < publicInputCount; i++) {
                             const valtype& input = stacktop(-5 - i);
-                            
-                            // 每个公共输入必须是 32 字节（一个标量）
+
+                            // Each public input must be 32 bytes (one scalar)
                             if (input.size() != 32) {
                                 return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                             }
-                            
+
                             publicInputsPointers.push_back(input.data());
                             publicInputsLengths.push_back(input.size());
                         }
-                        
-                        // 8. 调用简化的 C 接口验证函数
+
+                        // 8. Call the simplified C interface verification function
                         bool result = verify_plonk_halo2_kzg_bn256_simple(
                             proof_bytes.data(), proof_bytes.size(),
                             vk_bytes.data(), vk_bytes.size(),
-                            publicInputsPointers.data(), publicInputsLengths.data(), 
+                            publicInputsPointers.data(), publicInputsLengths.data(),
                             static_cast<size_t>(publicInputCount)
                         );
 
-                        if (!result) {
+                                                if (!result) {
                             return set_error(serror, SCRIPT_ERR_ZKP_VERIFY_FAILED);
                         }
-                        
-                        // 验证成功，不改变堆栈
-                    } 
+
+                        // Verification successful, stack unchanged
+                    }
                     else {
                         return set_error(serror, SCRIPT_ERR_ZKP_UNKNOWN_MODE);
                     }
