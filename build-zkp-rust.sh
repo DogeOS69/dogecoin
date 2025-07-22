@@ -53,9 +53,28 @@ else
   cargo build --release || error "Rust build failed"
 fi
 
-# Check if static library was generated
+# Check if library was generated
 if [ ! -f "${ZKP_LIB}" ]; then
-  error "Static library not generated: ${ZKP_LIB}"
+  error "Library not generated: ${ZKP_LIB}"
+fi
+
+# For cross-compilation, create symlinks so Makefile can find libraries at expected paths
+if [ -n "${CARGO_BUILD_TARGET}" ]; then
+  NATIVE_DIR="${ZKP_DIR}/target/release"
+  mkdir -p "${NATIVE_DIR}"
+
+  case "${CARGO_BUILD_TARGET}" in
+    *-apple-darwin)
+      ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.dylib" "${NATIVE_DIR}/libzkp_verifier.dylib"
+      ;;
+    *-windows-*)
+      ln -sf "../${CARGO_BUILD_TARGET}/release/zkp_verifier.dll" "${NATIVE_DIR}/zkp_verifier.dll"
+      ;;
+    *)
+      ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.so" "${NATIVE_DIR}/libzkp_verifier.so"
+      ;;
+  esac
+  info "Created symlink for cross-compiled library"
 fi
 
 # Create wrapper header file for simplified C++ interface

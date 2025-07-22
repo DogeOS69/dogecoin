@@ -561,22 +561,16 @@ if HAVE_RUST
 # Define paths and includes
 ZKP_INCLUDE = -I$(top_srcdir)/src/zkp-verifier/include -I$(top_srcdir)/src/zkp-verifier/target/cxxbridge
 # Use platform-specific shared library extension and handle cross-compilation
-ZKP_VERIFIER_LIB = $(shell \
-  if [ -n "$$CARGO_BUILD_TARGET" ]; then \
-    case "$$CARGO_BUILD_TARGET" in \
-      *-apple-darwin) echo "$(top_srcdir)/src/zkp-verifier/target/$$CARGO_BUILD_TARGET/release/libzkp_verifier.dylib" ;; \
-      *-windows-*) echo "$(top_srcdir)/src/zkp-verifier/target/$$CARGO_BUILD_TARGET/release/zkp_verifier.dll" ;; \
-      *) echo "$(top_srcdir)/src/zkp-verifier/target/$$CARGO_BUILD_TARGET/release/libzkp_verifier.so" ;; \
-    esac; \
-  else \
-    if TARGET_DARWIN; then \
-      echo "$(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.dylib"; \
-    elif TARGET_WINDOWS; then \
-      echo "$(top_srcdir)/src/zkp-verifier/target/release/zkp_verifier.dll"; \
-    else \
-      echo "$(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.so"; \
-    fi; \
-  fi)
+# Note: Cross-compilation paths are handled by build-zkp-rust.sh creating symlinks
+if TARGET_DARWIN
+ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.dylib
+else
+if TARGET_WINDOWS
+ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/zkp_verifier.dll
+else
+ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.so
+endif
+endif
 
 # Add include paths
 AM_CPPFLAGS += $(ZKP_INCLUDE)
