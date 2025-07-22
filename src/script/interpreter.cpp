@@ -1164,7 +1164,8 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
 
                         // Success case: leave stack unchanged as per DIP-0069
                     }
-                                        else if (mode.getint() == 1) { // PLONK/Halo2 + KZG on BN256
+                    else if (mode.getint() == 1) // PLONK/Halo2 + KZG on BN256
+                    {
                         // 1. Define and check consensus limits
                         const size_t MAX_ZKP_PROOF_SIZE = 4096;     // 4 KB
                         const size_t MAX_ZKP_VK_SIZE = 8192;        // 8 KB
@@ -1183,7 +1184,7 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                         int32_t publicInputCount = nPublicInputs.getint();
                         if (publicInputCount > static_cast<int32_t>(MAX_ZKP_PUBLIC_INPUTS_COUNT)) {
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                                                }
+                        }
 
                         // 4. Ensure the stack has enough elements, including all public inputs
                         if (stack.size() < static_cast<unsigned int>(3 + 1 + publicInputCount)) {
@@ -1197,7 +1198,7 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                         // 6. Check size constraints
                         if (proof_bytes.size() > MAX_ZKP_PROOF_SIZE || vk_bytes.size() > MAX_ZKP_VK_SIZE) {
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                                                }
+                        }
 
                         // 7. Collect public inputs
                         std::vector<const uint8_t*> publicInputsPointers;
@@ -1225,7 +1226,7 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                             static_cast<size_t>(publicInputCount)
                         );
 
-                                                if (!result) {
+                        if (!result) {
                             return set_error(serror, SCRIPT_ERR_ZKP_VERIFY_FAILED);
                         }
 
