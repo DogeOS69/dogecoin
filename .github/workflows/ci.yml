@@ -15,7 +15,7 @@ jobs:
     name: ${{ matrix.name }}
 
     env:
-      MAKEJOBS: "-j2"
+      MAKEJOBS: "-j3"
       CHECK_DOC: "0"
       CCACHE_SIZE: "100M"
       CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -276,12 +276,7 @@ jobs:
 
       - name: Build depends
         run: |
-          # Use single-threaded make in act/Docker to avoid jobserver issues
-          if [ "$ACT" = "true" ]; then
-            make -j1 -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
-          else
-            make $MAKEJOBS -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
-          fi
+          make $MAKEJOBS -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
 
       - name: Build ZKP verifier
         run: |
