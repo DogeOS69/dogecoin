@@ -1,0 +1,2 @@
+[build]
+target-dir = "depends/${CARGO_BUILD_TARGET:-native}/cargo-target"

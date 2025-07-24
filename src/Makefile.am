@@ -553,54 +553,52 @@ if ENABLE_QT_TESTS
 include Makefile.qttest.include
 endif
 
-
-
 # ZKP Verifier Rust library integration
 if HAVE_RUST
 
-# Define paths and includes
-ZKP_INCLUDE = -I$(top_srcdir)/src/zkp-verifier/include -I$(top_srcdir)/src/zkp-verifier/target/cxxbridge
-# Use platform-specific shared library extension and handle cross-compilation
-# Note: Cross-compilation paths are handled by build-zkp-rust.sh creating symlinks
-if TARGET_DARWIN
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.dylib
-else
-if TARGET_WINDOWS
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.a
-else
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.so
-endif
-endif
+# The `build-zkp-rust.sh` script handles the build process.
+# We just need to call it. It places the library in the correct `depends` subdir.
+.PHONY: build-zkp-verifier
+build-zkp-verifier:
+	@echo "Building ZKP Verifier..."
+	$(top_srcdir)/build-zkp-rust.sh
 
-# Add include paths
+# The library path is now standardized based on the .cargo/config.toml file.
+# We use LDFLAGS to point the linker to the right directory and LIBS to link the library.
+# For local/native builds, cargo puts things in depends/native/...
+# For cross builds, it's depends/$(host)/...
+if NATIVE_BUILD
+ZKP_VERIFIER_LDFLAGS = -L$(top_builddir)/depends/native/cargo-target/release
+else
+ZKP_VERIFIER_LDFLAGS = -L$(top_builddir)/depends/$(host)/cargo-target/release
+endif
+ZKP_VERIFIER_LIBS = -lzkp_verifier
+
+# Add linker flags
+AM_LDFLAGS += $(ZKP_VERIFIER_LDFLAGS)
+
+# Add include paths for zkp-verifier headers
+ZKP_INCLUDE = -I$(top_srcdir)/src/zkp-verifier/include
 AM_CPPFLAGS += $(ZKP_INCLUDE)
 
 # Add temporary stub implementation
 libdogecoin_consensus_a_SOURCES += zkp_stub.cpp
 
-# Build Rust library before linking
-.PHONY: build-zkp-verifier
-build-zkp-verifier:
-	@echo "Building Rust ZKP verifier shared library..."
-	cd $(top_srcdir)/src/zkp-verifier && cargo build --release || echo "Warning: Rust build failed"
-
-# Ensure ZKP library is built before linking
-$(ZKP_VERIFIER_LIB): build-zkp-verifier
-
-# Add ZKP library to executables and shared libraries
-dogecoind_LDADD += $(ZKP_VERIFIER_LIB)
-dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIB)
-
-# Add ZKP library to consensus library (now safe since it's a shared library)
-if BUILD_BITCOIN_LIBS
-libdogecoinconsensus_la_LIBADD += $(ZKP_VERIFIER_LIB)
-endif
+# Ensure the ZKP library is built before applications that need it.
+# The `dogecoind` target is a good proxy for the main build.
+dogecoind: build-zkp-verifier
+dogecoin-tx: build-zkp-verifier
+libdogecoinconsensus.la: build-zkp-verifier
 
 else
-# Rust not available - create dummy target
-.PHONY: build-zkp-verifier-dummy
-build-zkp-verifier-dummy:
-	@echo "Rust not available, skipping ZKP verifier build"
+ZKP_VERIFIER_LIBS =
+endif
+
+# Add ZKP library to executables and the consensus library
+dogecoind_LDADD += $(ZKP_VERIFIER_LIBS)
+dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIBS)
+if BUILD_BITCOIN_LIBS
+libdogecoinconsensus_la_LIBADD += $(ZKP_VERIFIER_LIBS)
 endif
 
 # Force target for dependencies

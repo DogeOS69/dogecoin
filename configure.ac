@@ -1334,7 +1334,7 @@ if test "x$CARGO" != "x"; then
     AC_PATH_PROG(RUSTC, rustc)
     AS_IF([test "x$RUSTC" = "x"],
         [AC_MSG_WARN([Rust compiler not found. ZKP functionality will be disabled.])])
-    
+
     if test "x$RUSTC" != "x"; then
         # Check minimum Rust version (1.70.0)
         RUST_VERSION=`$RUSTC --version | sed -n 's/^rustc \([[0-9]]*\.[[0-9]]*\.[[0-9]]*\).*/\1/p'`
@@ -1346,3 +1346,68 @@ fi
 
 # Define conditional for Rust availability
 AM_CONDITIONAL([HAVE_RUST], [test "x$CARGO" != "x" && test "x$RUSTC" != "x"])
+if test "x$CARGO" != "x" && test "x$RUSTC" != "x"; then
+  AC_MSG_NOTICE([Rust toolchain found, ZKP verifier will be built])
+  # Set Rust cross-compilation environment variables based on the host target
+  case "${host}" in
+    aarch64*-linux-gnu)
+      RUST_TARGET=aarch64-unknown-linux-gnu
+      AC_SUBST(RUST_TARGET)
+      AC_MSG_NOTICE([Configuring Rust for aarch64-unknown-linux-gnu cross-compilation])
+      export CARGO_BUILD_TARGET=$RUST_TARGET
+      export CC_aarch64_unknown_linux_gnu=${host}-gcc
+      export CXX_aarch64_unknown_linux_gnu=${host}-g++
+      export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=${host}-gcc
+      ;;
+    arm*-linux-gnueabihf)
+      RUST_TARGET=armv7-unknown-linux-gnueabihf
+      AC_SUBST(RUST_TARGET)
+      AC_MSG_NOTICE([Configuring Rust for armv7-unknown-linux-gnueabihf cross-compilation])
+      export CARGO_BUILD_TARGET=$RUST_TARGET
+      export CC_armv7_unknown_linux_gnueabihf=${host}-gcc
+      export CXX_armv7_unknown_linux_gnueabihf=${host}-g++
+      export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=${host}-gcc
+      ;;
+    i686-pc-linux-gnu)
+      RUST_TARGET=i686-unknown-linux-gnu
+      AC_SUBST(RUST_TARGET)
+      AC_MSG_NOTICE([Configuring Rust for i686-unknown-linux-gnu cross-compilation])
+      export CARGO_BUILD_TARGET=$RUST_TARGET
+      export CC_i686_unknown_linux_gnu=${host}-gcc
+      export CXX_i686_unknown_linux_gnu=${host}-g++
+      export CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=${host}-gcc
+      ;;
+    i686-w64-mingw32)
+      RUST_TARGET=i686-pc-windows-gnu
+      AC_SUBST(RUST_TARGET)
+      AC_MSG_NOTICE([Configuring Rust for i686-pc-windows-gnu cross-compilation])
+      export CARGO_BUILD_TARGET=$RUST_TARGET
+      export CC_i686_pc_windows_gnu=${host}-gcc
+      export CXX_i686_pc_windows_gnu=${host}-g++
+      export CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=${host}-gcc
+      ;;
+    x86_64-w64-mingw32)
+      RUST_TARGET=x86_64-pc-windows-gnu
+      AC_SUBST(RUST_TARGET)
+      AC_MSG_NOTICE([Configuring Rust for x86_64-pc-windows-gnu cross-compilation])
+      export CARGO_BUILD_TARGET=$RUST_TARGET
+      export CC_x86_64_pc_windows_gnu=${host}-gcc
+      export CXX_x86_64_pc_windows_gnu=${host}-g++
+      export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=${host}-gcc
+      ;;
+    x86_64-apple-darwin*)
+      RUST_TARGET=x86_64-apple-darwin
+      AC_SUBST(RUST_TARGET)
+      AC_MSG_NOTICE([Configuring Rust for x86_64-apple-darwin cross-compilation])
+      export CARGO_BUILD_TARGET=$RUST_TARGET
+      export CC_x86_64_apple_darwin=clang
+      export CXX_x86_64_apple_darwin=clang++
+      ;;
+    *)
+      AC_MSG_NOTICE([Building for native target, no Rust cross-compilation needed])
+      ;;
+  esac
+fi
+
+# Check for native build
+AM_CONDITIONAL([NATIVE_BUILD], [test "$build" = "$host"])

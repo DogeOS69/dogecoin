@@ -131,3 +131,9 @@ stage/
 *.iws
 *.iml
 *.ipr
+
+# Backup files
+*~
+
+# Local environment variables
+.env

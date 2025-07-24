@@ -22,64 +22,57 @@ command -v cargo >/dev/null 2>&1 || { error "cargo is required, please install R
 # Set paths
 DOGECOIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZKP_DIR="${DOGECOIN_ROOT}/src/zkp-verifier"
-ZKP_LIB="${ZKP_DIR}/target/release/libzkp_verifier.a"
-CXX_INCLUDE="${ZKP_DIR}/target/cxxbridge"
 
-# Check if zkp-verifier directory exists
-if [ ! -d "${ZKP_DIR}" ]; then
-  error "zkp-verifier directory not found: ${ZKP_DIR}"
-fi
+# Determine build architecture
+TARGET_ARCH="${CARGO_BUILD_TARGET:-native}"
+info "Build architecture: ${TARGET_ARCH}"
 
-info "Building Rust ZKP verification library..."
-
-# Build Rust library
-cd "${ZKP_DIR}"
-if [ -n "${CARGO_BUILD_TARGET}" ]; then
-  info "Cross-compiling for target: ${CARGO_BUILD_TARGET}"
-  cargo build --release --target "${CARGO_BUILD_TARGET}" || error "Rust cross-compilation failed"
-  # Update library path for cross-compilation with correct extension
-  case "${CARGO_BUILD_TARGET}" in
-    *-apple-darwin)
-      ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/libzkp_verifier.dylib"
-      ;;
-    *-windows-*)
-      ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/libzkp_verifier.a"
-      ;;
-    *)
-      ZKP_LIB="${ZKP_DIR}/target/${CARGO_BUILD_TARGET}/release/libzkp_verifier.so"
-      ;;
-  esac
+# Set cargo target directory
+if [ "$TARGET_ARCH" = "native" ]; then
+    CARGO_TARGET_DIR="${DOGECOIN_ROOT}/depends/native/cargo-target"
 else
-  cargo build --release || error "Rust build failed"
+    CARGO_TARGET_DIR="${DOGECOIN_ROOT}/depends/${TARGET_ARCH}/cargo-target"
+fi
+info "Cargo target directory: ${CARGO_TARGET_DIR}"
+
+# Ensure the target directory exists
+mkdir -p "$CARGO_TARGET_DIR"
+
+# Build the Rust library
+info "Building Rust ZKP verification library..."
+cd "${ZKP_DIR}"
+if [ "$TARGET_ARCH" != "native" ]; then
+    cargo build --release --target "${TARGET_ARCH}" --target-dir "$CARGO_TARGET_DIR" || error "Rust cross-compilation failed"
+else
+    cargo build --release --target-dir "$CARGO_TARGET_DIR" || error "Rust build failed"
 fi
 
 # Check if library was generated
-if [ ! -f "${ZKP_LIB}" ]; then
-  error "Library not generated: ${ZKP_LIB}"
+if [ "$TARGET_ARCH" = "native" ]; then
+    case "$(uname -s)" in
+        Darwin)
+            ZKP_LIB_PATH="${CARGO_TARGET_DIR}/release/libzkp_verifier.dylib"
+            ;;
+        *)
+            ZKP_LIB_PATH="${CARGO_TARGET_DIR}/release/libzkp_verifier.so"
+            ;;
+    esac
+else
+    case "${TARGET_ARCH}" in
+        *-apple-darwin)
+            ZKP_LIB_PATH="${CARGO_TARGET_DIR}/${TARGET_ARCH}/release/libzkp_verifier.dylib"
+            ;;
+        *-windows-*)
+            ZKP_LIB_PATH="${CARGO_TARGET_DIR}/${TARGET_ARCH}/release/libzkp_verifier.a"
+            ;;
+        *)
+            ZKP_LIB_PATH="${CARGO_TARGET_DIR}/${TARGET_ARCH}/release/libzkp_verifier.so"
+            ;;
+    esac
 fi
 
-# For cross-compilation, create symlinks so Makefile can find libraries at expected paths
-if [ -n "${CARGO_BUILD_TARGET}" ]; then
-  NATIVE_DIR="${ZKP_DIR}/target/release"
-  mkdir -p "${NATIVE_DIR}"
-
-  # Verify the cross-compiled library exists before creating symlink
-  if [ -f "${ZKP_LIB}" ]; then
-    case "${CARGO_BUILD_TARGET}" in
-      *-apple-darwin)
-        ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.dylib" "${NATIVE_DIR}/libzkp_verifier.dylib"
-        ;;
-      *-windows-*)
-        ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.a" "${NATIVE_DIR}/libzkp_verifier.a"
-        ;;
-      *)
-        ln -sf "../${CARGO_BUILD_TARGET}/release/libzkp_verifier.so" "${NATIVE_DIR}/libzkp_verifier.so"
-        ;;
-    esac
-    info "Created symlink for cross-compiled library: ${ZKP_LIB} -> ${NATIVE_DIR}"
-  else
-    error "Cross-compiled library not found: ${ZKP_LIB}"
-  fi
+if [ ! -f "${ZKP_LIB_PATH}" ]; then
+    error "Library not generated: ${ZKP_LIB_PATH}"
 fi
 
 # Create wrapper header file for simplified C++ interface
