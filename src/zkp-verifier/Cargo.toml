@@ -21,6 +21,7 @@ halo2-axiom = "0.5.0"
 halo2curves-axiom = "0.5.3"
 # Use specific rev from axiom-crypto's fork to match your openvm-aggregation repo
 snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier", rev = "58f990fb00d5939f850d98361cabf286776b4f7d" }
+once_cell = "1.21.3"
 
 [build-dependencies]
 cxx-build = "1.0.117"
