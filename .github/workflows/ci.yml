@@ -15,7 +15,7 @@ jobs:
     name: ${{ matrix.name }}
 
     env:
-      MAKEJOBS: "-j1"
+      MAKEJOBS: "-j3"
       CHECK_DOC: "0"
       CCACHE_SIZE: "100M"
       CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -45,7 +45,7 @@ jobs:
           - name: i686-linux
             host: i686-pc-linux-gnu
             container: ubuntu:20.04
-            packages: g++-i686-linux-gnu bc python3-zmq
+            packages: g++-multilib bc python3-zmq
             run-bench: true
             test-script: |
               make check $MAKEJOBS VERBOSE=1
@@ -107,7 +107,6 @@ jobs:
           - name: x86_64-linux-dbg
             host: x86_64-unknown-linux-gnu
             container: ubuntu:20.04
-            container-options: --privileged
             packages: bc python3-zmq
             run-bench: true
             test-script: |
@@ -227,9 +226,6 @@ jobs:
                pkg-config bsdmainutils curl ca-certificates ccache rsync git \
                procps bison python3 python3-pip python3-setuptools python3-wheel
           apt-get install -y ${{ matrix.packages }}
-          # Install Node.js 18.x for GitHub Actions compatibility
-          curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-          apt-get install -y nodejs
           python3 -m pip install setuptools==70.3.0 --upgrade
           python3 -m pip install lief
 
@@ -245,6 +241,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           . $HOME/.cargo/env
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu armv7-unknown-linux-gnueabihf i686-unknown-linux-gnu x86_64-pc-windows-gnu
 
       - name: SDK cache
         if: ${{ matrix.sdk }}
@@ -276,7 +273,6 @@ jobs:
           key: ${{ matrix.name }}-${{ env.cache-name }}-${{ hashFiles('depends/packages/*', '.github/workflows/ci.yml') }}
 
       - name: Build depends
-        working-directory: ${{ github.workspace }}
         run: |
           make $MAKEJOBS -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
 
