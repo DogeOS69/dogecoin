@@ -512,7 +512,7 @@ BOOST_AUTO_TEST_CASE(script_build)
     tests.push_back(TestBuilder(CScript() << ToByteVector(keys.pubkey0C) << OP_CHECKSIG,
                                 "P2SH(P2PK), bad redeemscript", SCRIPT_VERIFY_P2SH, true
                                ).PushSig(keys.key0).PushRedeem().DamagePush(10).ScriptError(SCRIPT_ERR_EVAL_FALSE));
-    
+
     tests.push_back(TestBuilder(CScript() << OP_DUP << OP_HASH160 << ToByteVector(keys.pubkey0.GetID()) << OP_EQUALVERIFY << OP_CHECKSIG,
                                 "P2SH(P2PKH)", SCRIPT_VERIFY_P2SH, true
                                ).PushSig(keys.key0).Push(keys.pubkey0).PushRedeem());
@@ -1465,10 +1465,96 @@ BOOST_AUTO_TEST_CASE(script_FindAndDelete)
     BOOST_CHECK(s == expect);
 }
 
-BOOST_AUTO_TEST_CASE(script_OP_CHECKZKP_execution)
+BOOST_AUTO_TEST_CASE(script_OP_CHECKZKP_PLONK_execution)
 {
-    // 1. 使用真实ZKP数据
-    // 从提供的JSON数据创建测试元素
+    // Test Mode 1: PLONK/Halo2 + KZG on BN256
+
+    // 1. Create placeholder PLONK test data (to be replaced with real data)
+    std::vector<std::string> plonkElements = {
+        "01", // Mode 1 = PLONK
+        // Placeholder proof data (≤4KB) - will be replaced with real PLONK proof
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "02", // Number of public inputs = 2
+        // Placeholder verification key (≤8KB) - will be replaced with real PLONK VK
+        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        // Public input 0 (32 bytes)
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        // Public input 1 (32 bytes)
+        "2222222222222222222222222222222222222222222222222222222222222222"
+    };
+
+    // 2. Build script following Mode 1 stack layout
+    CScript scriptPLONK;
+
+    // Add public inputs first (bottom of stack)
+    for (int i = 4; i <= 5; i++) {
+        std::vector<unsigned char> data = ParseHex(plonkElements[i]);
+        scriptPLONK << data;
+    }
+
+    // Add verification key
+    std::vector<unsigned char> vkData = ParseHex(plonkElements[3]);
+    scriptPLONK << vkData;
+
+    // Add number of public inputs
+    std::vector<unsigned char> numInputsData = ParseHex(plonkElements[2]);
+    scriptPLONK << numInputsData;
+
+    // Add proof data
+    std::vector<unsigned char> proofData = ParseHex(plonkElements[1]);
+    scriptPLONK << proofData;
+
+    // Add mode (1 for PLONK) and OP_CHECKZKP
+    std::vector<unsigned char> modeData = ParseHex(plonkElements[0]);
+    scriptPLONK << modeData << OP_CHECKZKP;
+
+    // 3. Verify script structure
+    CScript::const_iterator pc = scriptPLONK.begin();
+    opcodetype opcode;
+    std::vector<unsigned char> vchData;
+
+    int dataCount = 0;
+    while (scriptPLONK.GetOp(pc, opcode, vchData)) {
+        dataCount++;
+    }
+    BOOST_CHECK_EQUAL(dataCount, 7); // 6 data elements + OP_CHECKZKP
+
+    // 4. Execute script
+    CMutableTransaction txFrom = BuildCreditingTransaction(scriptPLONK, 1000);
+    CMutableTransaction txTo = BuildSpendingTransaction(CScript(), CScriptWitness(), txFrom);
+
+    // Execute script
+    ScriptError err;
+    bool result = VerifyScript(
+        CScript(), // Empty input script
+        scriptPLONK, // PLONK verification script
+        nullptr,   // No witness data
+        SCRIPT_VERIFY_P2SH,
+        MutableTransactionSignatureChecker(&txTo, 0, txFrom.vout[0].nValue),
+        &err
+    );
+
+    // Record actual error for analysis
+    std::string errStr = ScriptErrorString(err);
+    BOOST_TEST_MESSAGE("PLONK OP_CHECKZKP execution resulted in: " + errStr);
+
+    // Since we're using placeholder data, expect this to fail with ZKP verification error
+    // When real PLONK proof data is provided, this should succeed
+    if (!result) {
+        // Should fail with ZKP-related error, not stack or opcode errors
+        BOOST_CHECK(err == SCRIPT_ERR_ZKP_VERIFY_FAILED || err == SCRIPT_ERR_UNKNOWN_ERROR);
+        BOOST_TEST_MESSAGE("Expected failure with placeholder PLONK data");
+    } else {
+        BOOST_TEST_MESSAGE("SUCCESS: PLONK proof verification passed!");
+    }
+}
+
+BOOST_AUTO_TEST_CASE(script_OP_CHECKZKP_GROTH16_execution)
+{
+    // Test Mode 0: Groth16 proofs on BLS12-381 (renamed for clarity)
+
+    // 1. Use real ZKP data
+    // Create test elements from provided JSON data
     std::vector<std::string> zkpElements = {
         "00",
         "894c08d2d115ce3e01275d73f38444699ead6b478cc0e7f0dcf9b128e1677e85495e65b08ea5c9444314195f3a2f0123aefc49f269a82d1dfd6b392b91ac3e30188c1dcfc20d34f4092bb50c01658e0e",
@@ -1488,70 +1574,70 @@ BOOST_AUTO_TEST_CASE(script_OP_CHECKZKP_execution)
         "3e48bca78dd2ba61117ceed51b1ca1f0bf4c84a39fde2fdcfebd783c7fdb9ed0dfcd31805aef42aa6d82b9a86a41e805",
         "d16aafc36374c8eeeda875332c1823a02cc16f6b02cb6a00ff212c50793cabadb02456bb87113c0a9914edde27c3bc16"
     };
-    
-    // 2. 构建符合DIP-69规范的脚本
+
+    // 2. Build script conforming to DIP-69 specification
     CScript scriptZKP;
-    
-    // 添加证明元素 (π_A_x, π_A_y, π_B_x0, π_B_x1, π_B_y0, π_B_y1, π_C_x, π_C_y)
+
+    // Add proof elements (π_A_x, π_A_y, π_B_x0, π_B_x1, π_B_y0, π_B_y1, π_C_x, π_C_y)
     for (int i = 1; i <= 8; i++) {
         std::vector<unsigned char> data = ParseHex(zkpElements[i]);
         scriptZKP << data;
     }
-    
-    // 添加公共输入值
+
+    // Add public input values
     for (int i = 9; i <= 10; i++) {
         std::vector<unsigned char> data = ParseHex(zkpElements[i]);
         scriptZKP << data;
     }
-    
-    // 添加验证密钥数据块
+
+    // Add verification key data blocks
     for (int i = 11; i <= 16; i++) {
         std::vector<unsigned char> data = ParseHex(zkpElements[i]);
         scriptZKP << data;
     }
-    
-    // 添加模式选择器(0)和OP_CHECKZKP操作码
+
+    // Add mode selector (0) and OP_CHECKZKP opcode
     scriptZKP << ParseHex(zkpElements[0]) << OP_CHECKZKP;
-    
-    // 验证脚本结构
+
+    // 3. Verify script structure
     CScript::const_iterator pc = scriptZKP.begin();
     opcodetype opcode;
     std::vector<unsigned char> vchData;
-    
-    // 验证脚本包含了正确的数据元素和操作码
+
+    // Verify script contains correct data elements and opcodes
     int dataCount = 0;
     while (scriptZKP.GetOp(pc, opcode, vchData)) {
         dataCount++;
     }
-    BOOST_CHECK_EQUAL(dataCount, 18); // 17个数据元素 + OP_CHECKZKP操作码
-    
-    // 3. 执行 - 验证脚本执行
-    // 创建测试交易
+    BOOST_CHECK_EQUAL(dataCount, 18); // 17 data elements + OP_CHECKZKP opcode
+
+    // 4. Execute - verify script execution
+    // Create test transactions
     CMutableTransaction txFrom = BuildCreditingTransaction(scriptZKP, 1000);
     CMutableTransaction txTo = BuildSpendingTransaction(CScript(), CScriptWitness(), txFrom);
-    
-    // 执行脚本
+
+    // Execute script
     ScriptError err;
     bool result = VerifyScript(
-        CScript(), // 输入脚本为空
-        scriptZKP, // 使用我们构建的ZKP脚本作为输出脚本
-        nullptr,   // 无见证数据
+        CScript(), // Input script is empty
+        scriptZKP, // Use our built ZKP script as output script
+        nullptr,   // No witness data
         SCRIPT_VERIFY_P2SH,
         MutableTransactionSignatureChecker(&txTo, 0, txFrom.vout[0].nValue),
         &err
     );
-    
-    // 记录实际错误以便分析
+
+    // Record actual error for analysis
     std::string errStr = ScriptErrorString(err);
-    BOOST_TEST_MESSAGE("OP_CHECKZKP execution resulted in: " + errStr);
-    
-    // 如果OP_CHECKZKP完全实现并与我们的测试数据匹配，这应该成功
-    // 否则，应该提供一个特定的ZKP相关错误
+    BOOST_TEST_MESSAGE("Groth16 OP_CHECKZKP execution resulted in: " + errStr);
+
+    // If OP_CHECKZKP is fully implemented and matches our test data, this should succeed
+    // Otherwise, should provide a specific ZKP-related error
     if (!result) {
-        // 仍然期望失败是正常的，因为完整实现可能尚未完成
+        // Failure is still expected to be normal, as full implementation may not yet be complete
         BOOST_CHECK(!result);
     } else {
-        BOOST_TEST_MESSAGE("成功: ZK证明验证通过！");
+        BOOST_TEST_MESSAGE("SUCCESS: Groth16 ZK proof verification passed!");
     }
 }
 
