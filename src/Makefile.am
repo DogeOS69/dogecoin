@@ -558,16 +558,31 @@ endif
 # ZKP Verifier Rust library integration
 if HAVE_RUST
 
+# Map autotools host triplet to Rust target triplet
+RUST_TARGET_MAP_aarch64_linux_gnu = aarch64-unknown-linux-gnu
+RUST_TARGET_MAP_arm_linux_gnueabihf = armv7-unknown-linux-gnueabihf
+RUST_TARGET_MAP_i686_pc_linux_gnu = i686-unknown-linux-gnu
+RUST_TARGET_MAP_x86_64_unknown_linux_gnu = x86_64-unknown-linux-gnu
+RUST_TARGET_MAP_x86_64_w64_mingw32 = x86_64-pc-windows-gnu
+RUST_TARGET_MAP_x86_64_apple_darwin = x86_64-apple-darwin
+RUST_TARGET_MAP_aarch64_apple_darwin = aarch64-apple-darwin
+
+# Determine Rust target - fallback to host if no mapping exists
+RUST_TARGET = $(or $(RUST_TARGET_MAP_$(subst -,_,$(host_alias))),$(host_alias))
+
+# Set Cargo target directory according to build system pattern
+CARGO_TARGET_DIR = $(abs_top_builddir)/depends/$(host_alias)/cargo-target
+
 # Define paths and includes
-ZKP_INCLUDE = -I$(top_srcdir)/src/zkp-verifier/include -I$(top_srcdir)/src/zkp-verifier/target/cxxbridge
+ZKP_INCLUDE = -I$(top_srcdir)/src/zkp-verifier/include
 # Use platform-specific shared library extension
 if TARGET_DARWIN
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.dylib
+ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/libzkp_verifier.dylib
 else
 if TARGET_WINDOWS
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/zkp_verifier.dll
+ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/zkp_verifier.dll
 else
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.so
+ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/libzkp_verifier.so
 endif
 endif
 
@@ -580,8 +595,22 @@ libdogecoin_consensus_a_SOURCES += zkp_stub.cpp
 # Build Rust library before linking
 .PHONY: build-zkp-verifier
 build-zkp-verifier:
-	@echo "Building Rust ZKP verifier shared library..."
-	cd $(top_srcdir)/src/zkp-verifier && cargo build --release || echo "Warning: Rust build failed"
+	@echo "Building Rust ZKP verifier shared library for target $(RUST_TARGET)..."
+	@mkdir -p $(CARGO_TARGET_DIR)
+	@cd $(top_srcdir)/src/zkp-verifier && \
+	if [ "$(RUST_TARGET)" != "$(host_alias)" ] && [ "$(RUST_TARGET)" != "" ]; then \
+		echo "Cross-compiling for $(RUST_TARGET)"; \
+		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) \
+		CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=$(lastword $(CC)) \
+		CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=$(lastword $(CC)) \
+		CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=$(lastword $(CC)) \
+		CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$(lastword $(CC)) \
+		cargo build --release --target $(RUST_TARGET) || echo "Warning: Rust build failed"; \
+		mkdir -p $(CARGO_TARGET_DIR)/release && cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.* $(CARGO_TARGET_DIR)/release/ 2>/dev/null || true; \
+	else \
+		echo "Native build for $(host_alias)"; \
+		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) cargo build --release || echo "Warning: Rust build failed"; \
+	fi
 
 # Ensure ZKP library is built before linking
 $(ZKP_VERIFIER_LIB): build-zkp-verifier
