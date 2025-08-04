@@ -38,7 +38,7 @@ share/setup.nsi
 share/qt/Info.plist
 src/zkp-verifier/target/
 src/zkp-verifier/Cargo.lock
-
+depends/cargo-target
 src/univalue/gen
 
 src/qt/*.moc
