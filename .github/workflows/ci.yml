@@ -15,7 +15,7 @@ jobs:
     name: ${{ matrix.name }}
 
     env:
-      MAKEJOBS: "-j1"
+      MAKEJOBS: "-j3"
       CHECK_DOC: "0"
       CCACHE_SIZE: "100M"
       CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -228,12 +228,6 @@ jobs:
           apt-get install -y ${{ matrix.packages }}
           python3 -m pip install setuptools==70.3.0 --upgrade
           python3 -m pip install lief
-
-      - name: Install Node
-        run: |
-          # Install Node.js 18.x for GitHub Actions compatibility
-          curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-          apt-get install -y nodejs
 
       - name: Post install
         if: ${{ matrix.postinstall }}
