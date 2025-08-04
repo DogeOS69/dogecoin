@@ -563,8 +563,9 @@ RUST_TARGET_MAP_aarch64_linux_gnu = aarch64-unknown-linux-gnu
 RUST_TARGET_MAP_arm_linux_gnueabihf = armv7-unknown-linux-gnueabihf
 RUST_TARGET_MAP_i686_pc_linux_gnu = i686-unknown-linux-gnu
 RUST_TARGET_MAP_x86_64_unknown_linux_gnu = x86_64-unknown-linux-gnu
+RUST_TARGET_MAP_i686_w64_mingw32 = i686-pc-windows-gnu
 RUST_TARGET_MAP_x86_64_w64_mingw32 = x86_64-pc-windows-gnu
-RUST_TARGET_MAP_x86_64_apple_darwin = x86_64-apple-darwin
+RUST_TARGET_MAP_x86_64_apple_darwin11 = x86_64-apple-darwin
 RUST_TARGET_MAP_aarch64_apple_darwin = aarch64-apple-darwin
 
 # Determine Rust target - fallback to host if no mapping exists
@@ -601,12 +602,21 @@ build-zkp-verifier:
 	if [ "$(RUST_TARGET)" != "$(host_alias)" ] && [ "$(RUST_TARGET)" != "" ]; then \
 		echo "Cross-compiling for $(RUST_TARGET)"; \
 		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) \
-		CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=$(lastword $(CC)) \
-		CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=$(lastword $(CC)) \
-		CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=$(lastword $(CC)) \
-		CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$(lastword $(CC)) \
+		CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+		CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+		CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc \
+		CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=i686-w64-mingw32-gcc \
+		CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+		CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=clang \
 		cargo build --release --target $(RUST_TARGET) || echo "Warning: Rust build failed"; \
-		mkdir -p $(CARGO_TARGET_DIR)/release && cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.* $(CARGO_TARGET_DIR)/release/ 2>/dev/null || true; \
+		mkdir -p $(CARGO_TARGET_DIR)/release && \
+		if echo "$(RUST_TARGET)" | grep -q "windows"; then \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/zkp_verifier.dll $(CARGO_TARGET_DIR)/release/ 2>/dev/null || true; \
+		elif echo "$(RUST_TARGET)" | grep -q "darwin"; then \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dylib $(CARGO_TARGET_DIR)/release/ 2>/dev/null || true; \
+		else \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.so $(CARGO_TARGET_DIR)/release/ 2>/dev/null || true; \
+		fi; \
 	else \
 		echo "Native build for $(host_alias)"; \
 		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) cargo build --release || echo "Warning: Rust build failed"; \
