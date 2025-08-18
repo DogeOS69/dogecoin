@@ -408,6 +408,11 @@ qt_dogecoin_qt_LDADD += $(LIBDOGECOIN_CLI) $(LIBDOGECOIN_COMMON) $(LIBDOGECOIN_U
 qt_dogecoin_qt_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(QT_LDFLAGS) $(LIBTOOL_APP_LDFLAGS)
 qt_dogecoin_qt_LIBTOOLFLAGS = --tag CXX
 
+if TARGET_WINDOWS
+qt_dogecoin_qt_LDFLAGS += -Wl,--allow-multiple-definition
+qt_dogecoin_qt_LDADD += $(ZKP_VERIFIER_LIB)
+endif
+
 #locale/foo.ts -> locale/foo.qm
 QT_QM=$(QT_TS:.ts=.qm)
 

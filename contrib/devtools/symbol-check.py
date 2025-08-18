@@ -155,6 +155,7 @@ PE_ALLOWED_LIBRARIES = {
 'WINMM.dll', # same as above but lowercase extension in win64 binary
 'WINSPOOL.DRV', # Printer spooler driver for paper wallet printing
 'WTSAPI32.dll',
+'zkp_verifier.dll', # Rust ZKP verifier library
 }
 
 def check_version(max_versions, version, arch) -> bool:

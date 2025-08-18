@@ -75,6 +75,8 @@ RAW_TEST_FILES =
 
 GENERATED_TEST_FILES = $(JSON_TEST_FILES:.json=.json.h) $(RAW_TEST_FILES:.raw=.raw.h)
 
+
+
 # test_bitcoin binary #
 BITCOIN_TESTS =\
   test/arith_uint256_tests.cpp \
@@ -164,6 +166,11 @@ test_test_dogecoin_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(LIBTOOL_APP_LDFLAGS) -
 
 if ENABLE_ZMQ
 test_test_dogecoin_LDADD += $(ZMQ_LIBS)
+endif
+
+if TARGET_WINDOWS
+test_test_dogecoin_LDFLAGS += -Wl,--allow-multiple-definition
+test_test_dogecoin_LDADD += $(ZKP_VERIFIER_LIB)
 endif
 #
 

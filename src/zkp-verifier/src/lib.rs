@@ -42,6 +42,7 @@ impl fmt::Display for ZkpError {
 impl Error for ZkpError {}
 
 
+#[cfg(not(target_os = "windows"))]
 #[cxx::bridge]
 mod ffi {
     extern "Rust" {
@@ -120,6 +121,39 @@ pub fn verify_plonk_halo2_kzg_bn2s6(
     }
 }
 
+#[no_mangle]
+pub extern "C" fn verify_plonk_halo2_kzg_bn256_simple(
+    proof_data: *const u8, proof_len: usize,
+    vk_data: *const u8, vk_len: usize,
+    public_inputs: *const *const u8,
+    input_lengths: *const usize,
+    input_count: usize,
+) -> bool {
+    if proof_data.is_null() || vk_data.is_null() {
+        return false;
+    }
+    let proof = unsafe { std::slice::from_raw_parts(proof_data, proof_len) };
+    let vk = unsafe { std::slice::from_raw_parts(vk_data, vk_len) };
+    let mut inputs = Vec::with_capacity(input_count);
+    if input_count > 0 {
+        if public_inputs.is_null() || input_lengths.is_null() {
+            return false;
+        }
+        let ptrs = unsafe { std::slice::from_raw_parts(public_inputs, input_count) };
+        let lens = unsafe { std::slice::from_raw_parts(input_lengths, input_count) };
+        for i in 0..input_count {
+            if ptrs[i].is_null() {
+                return false;
+            }
+            let input_slice = unsafe { std::slice::from_raw_parts(ptrs[i], lens[i]) };
+            inputs.push(input_slice.to_vec());
+        }
+    }
+    // Pass empty params for simple API
+    let empty_params: &[u8] = &[];
+    verify_plonk_halo2_kzg_bn2s6(proof, vk, &inputs, empty_params)
+}
+
 #[derive(Default, Clone)]
 struct MyCircuit {
     a: Value<Fr>,
@@ -150,9 +184,9 @@ impl Circuit<Fr> for MyCircuit {
         let advice = [meta.advice_column(), meta.advice_column()];
         let instance = meta.instance_column();
         let s_mul = meta.selector();
-        
+
         meta.enable_equality(instance);
-        
+
         meta.create_gate("mul gate", |meta| {
             let lhs = meta.query_advice(advice[0], Rotation::cur());
             let rhs = meta.query_advice(advice[1], Rotation::cur());
@@ -179,7 +213,7 @@ impl Circuit<Fr> for MyCircuit {
                 config.s_mul.enable(&mut region, 0)?;
                 region.assign_advice(config.advice[0], 0, self.a);
                 region.assign_advice(config.advice[1], 0, self.b);
-                
+
                 Ok(())
             },
         )

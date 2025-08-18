@@ -59,6 +59,11 @@ endif
 bench_bench_dogecoin_LDADD += $(BOOST_LIBS) $(BDB_LIBS) $(SSL_LIBS) $(CRYPTO_LIBS) $(MINIUPNPC_LIBS) $(EVENT_PTHREADS_LIBS) $(EVENT_LIBS)
 bench_bench_dogecoin_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(LIBTOOL_APP_LDFLAGS)
 
+if TARGET_WINDOWS
+bench_bench_dogecoin_LDFLAGS += -Wl,--allow-multiple-definition
+bench_bench_dogecoin_LDADD += $(ZKP_VERIFIER_LIB)
+endif
+
 CLEAN_BITCOIN_BENCH = bench/*.gcda bench/*.gcno $(GENERATED_TEST_FILES)
 
 CLEANFILES += $(CLEAN_BITCOIN_BENCH)

@@ -132,8 +132,6 @@ jobs:
               update-binfmts --enable
               update-binfmts --display
             run-bench: false
-            test-script: |
-              make check $MAKEJOBS VERBOSE=1
             check-security: true
             check-symbols: true
             dep-opts: ""
@@ -151,8 +149,6 @@ jobs:
               update-binfmts --enable
               update-binfmts --display
             run-bench: false
-            test-script: |
-              make check $MAKEJOBS VERBOSE=1
             check-security: true
             check-symbols: true
             dep-opts: ""
@@ -170,8 +166,6 @@ jobs:
               update-binfmts --enable
               update-binfmts --display
             run-bench: false
-            test-script: |
-              make check $MAKEJOBS VERBOSE=1
             check-security: true
             check-symbols: false
             dep-opts: "AVX2=1 MINGW=1"

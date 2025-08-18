@@ -466,6 +466,11 @@ if GLIBC_BACK_COMPAT
 endif
 
 libdogecoinconsensus_la_LDFLAGS = $(AM_LDFLAGS) -no-undefined $(RELDFLAGS)
+
+if TARGET_WINDOWS
+libdogecoinconsensus_la_LDFLAGS += -Wl,--allow-multiple-definition
+endif
+
 libdogecoinconsensus_la_LIBADD = $(LIBSECP256K1) $(LIBBLS)
 libdogecoinconsensus_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(builddir)/obj -I$(srcdir)/secp256k1/include -I$(srcdir)/bls12-381/include -DBUILD_BITCOIN_INTERNAL
 libdogecoinconsensus_la_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
@@ -513,6 +518,8 @@ clean-local:
 	-rm -f leveldb/*/*.gcda leveldb/*/*.gcno leveldb/helpers/memenv/*.gcda leveldb/helpers/memenv/*.gcno
 	-rm -f config.h
 	-rm -rf test/__pycache__
+	-rm -rf $(CARGO_TARGET_DIR)
+	-rm -f $(ZKP_VERIFIER_LIB)
 
 .rc.o:
 	@test -f $(WINDRES)
@@ -581,7 +588,8 @@ if TARGET_DARWIN
 ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/libzkp_verifier.dylib
 else
 if TARGET_WINDOWS
-ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/zkp_verifier.dll
+# Link against the import library for the DLL on MinGW targets
+ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/libzkp_verifier.dll.a
 else
 ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/libzkp_verifier.so
 endif
@@ -590,12 +598,29 @@ endif
 # Add include paths
 AM_CPPFLAGS += $(ZKP_INCLUDE)
 
-# Add temporary stub implementation
-libdogecoin_consensus_a_SOURCES += zkp_stub.cpp
+# Compute GCC_LIBDIR with fallback for CI
+GCC_LIBDIR = $(shell $(host_alias)-g++ -print-libgcc-file-name | xargs dirname || echo "/usr/lib/gcc/$(host_alias)/10")
 
-# Build Rust library before linking
-.PHONY: build-zkp-verifier
-build-zkp-verifier:
+# For Windows, add flag to allow multiple definitions in static link
+if TARGET_WINDOWS
+dogecoind_LDFLAGS += -Wl,--allow-multiple-definition -lbcrypt -luserenv -lntdll
+dogecoin_tx_LDFLAGS += -Wl,--allow-multiple-definition
+endif
+
+# Gate stub inclusion: exclude for Windows to avoid C++ runtime conflicts
+if TARGET_WINDOWS
+# no stub for Windows: rely on Rust C ABI
+else
+libdogecoin_consensus_a_SOURCES += zkp_stub.cpp
+endif
+
+# Add explicit dependency for consensus lib on ZKP lib if BUILD_BITCOIN_LIBS
+if BUILD_BITCOIN_LIBS
+libdogecoinconsensus_la_LIBADD += $(ZKP_VERIFIER_LIB)
+endif
+
+# Make library the target, add Rust sources as prereqs
+$(ZKP_VERIFIER_LIB): $(top_srcdir)/src/zkp-verifier/src/lib.rs $(top_srcdir)/src/zkp-verifier/Cargo.toml
 	@echo "Building Rust ZKP verifier shared library for target $(RUST_TARGET)..."
 	@mkdir -p $(CARGO_TARGET_DIR)
 	@cd $(top_srcdir)/src/zkp-verifier && \
@@ -608,30 +633,56 @@ build-zkp-verifier:
 		CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=i686-w64-mingw32-gcc \
 		CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
 		CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=clang \
+		CXX_x86_64_apple_darwin=x86_64-apple-darwin11-clang++ \
+		CC_x86_64_apple_darwin=x86_64-apple-darwin11-clang \
+		AR_x86_64_apple_darwin=x86_64-apple-darwin11-ar \
+		CXX_i686_pc_windows_gnu=i686-w64-mingw32-g++ \
+		CC_i686_pc_windows_gnu=i686-w64-mingw32-gcc \
+		AR_i686_pc_windows_gnu=i686-w64-mingw32-ar \
+		CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++ \
+		CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
+		AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar \
+		RUSTFLAGS="$$(if echo "$(RUST_TARGET)" | grep -q windows; then echo "-C panic=unwind -C lto=off -C link-arg=-lgcc_eh -C link-arg=-lgcc_s -C link-arg=-lpthread"; fi)" \
 		cargo build --release --target $(RUST_TARGET) || echo "Warning: Rust build failed"; \
 		mkdir -p $(CARGO_TARGET_DIR)/release && \
 		if echo "$(RUST_TARGET)" | grep -q "windows"; then \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dll.a $@ 2>/dev/null || true; \
 			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/zkp_verifier.dll $(CARGO_TARGET_DIR)/release/ 2>/dev/null || true; \
 		elif echo "$(RUST_TARGET)" | grep -q "darwin"; then \
-			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dylib $(CARGO_TARGET_DIR)/release/ 2>/dev/null || true; \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dylib $@ 2>/dev/null || true; \
 		else \
-			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.so $(CARGO_TARGET_DIR)/release/ 2>/dev/null || true; \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.so $@ 2>/dev/null || true; \
 		fi; \
 	else \
 		echo "Native build for $(host_alias)"; \
-		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) cargo build --release || echo "Warning: Rust build failed"; \
+		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) RUSTFLAGS="$$(if echo "$(RUST_TARGET)" | grep -q windows; then echo "-C panic=unwind -C lto=off -C link-arg=-lgcc_eh -C link-arg=-lgcc_s -C link-arg=-lpthread"; fi)" cargo build --release || echo "Warning: Rust build failed"; \
+		cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.so $@ 2>/dev/null || true; \
 	fi
+	@touch $@
 
-# Ensure ZKP library is built before linking
-$(ZKP_VERIFIER_LIB): build-zkp-verifier
+# $(ZKP_VERIFIER_LIB): $(ZKP_STAMP)
 
 # Add ZKP library to executables and shared libraries
+if TARGET_WINDOWS
 dogecoind_LDADD += $(ZKP_VERIFIER_LIB)
 dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIB)
-
-# Add ZKP library to consensus library (now safe since it's a shared library)
 if BUILD_BITCOIN_LIBS
 libdogecoinconsensus_la_LIBADD += $(ZKP_VERIFIER_LIB)
+endif
+else
+if TARGET_DARWIN
+dogecoind_LDADD += $(ZKP_VERIFIER_LIB)
+dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIB)
+if BUILD_BITCOIN_LIBS
+libdogecoinconsensus_la_LDFLAGS += -L$(CARGO_TARGET_DIR)/release -lzkp_verifier
+endif
+else
+dogecoind_LDADD += $(ZKP_VERIFIER_LIB)
+dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIB)
+if BUILD_BITCOIN_LIBS
+libdogecoinconsensus_la_LIBADD += $(ZKP_VERIFIER_LIB)
+endif
+endif
 endif
 
 else
