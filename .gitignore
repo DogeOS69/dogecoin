@@ -40,12 +40,17 @@ src/zkp-verifier/target/
 src/zkp-verifier/Cargo.lock
 depends/cargo-target
 src/univalue/gen
-
+dist/
+Dogecoin-Qt.app/
+*.tiff
+src/qt/test/*.dll
 src/qt/*.moc
 src/qt/moc_*.cpp
 src/qt/forms/ui_*.h
-
 src/qt/test/moc*.cpp
+src/test/*.dll
+src/*.dll
+venv/
 
 .deps
 .dirstamp
