@@ -27,7 +27,8 @@ def check_ELF_RELRO(binary) -> bool:
         # However, the dynamic linker need to write to this area so these are RW.
         # Glibc itself takes care of mprotecting this area R after relocations are finished.
         # See also https://marc.info/?l=binutils&m=1498883354122353
-        if segment.type == lief.ELF.SEGMENT_TYPES.GNU_RELRO:
+        GNU_RELRO = segment.type.GNU_RELRO if hasattr(segment.type, 'GNU_RELRO') else None
+        if segment.type == GNU_RELRO:
             have_gnu_relro = True
 
     have_bindnow = False
@@ -96,7 +97,8 @@ def check_ELF_separate_code(binary):
     # and for each section, remember the flags of the associated program header.
     flags_per_section = {}
     for segment in binary.segments:
-        if segment.type ==  lief.ELF.SEGMENT_TYPES.LOAD:
+        LOAD = segment.type.LOAD if hasattr(segment.type, 'LOAD') else None
+        if segment.type == LOAD:
             for section in segment.sections:
                 flags_per_section[section.name] = segment.flags
     # Spot-check ELF LOAD program header flags per section
@@ -120,13 +122,21 @@ def check_ELF_control_flow(binary) -> bool:
 
 def check_PE_DYNAMIC_BASE(binary) -> bool:
     '''PIE: DllCharacteristics bit 0x40 signifies dynamicbase (ASLR)'''
-    return lief.PE.DLL_CHARACTERISTICS.DYNAMIC_BASE in binary.optional_header.dll_characteristics_lists
+    characteristics = binary.optional_header.dll_characteristics_lists
+    if not characteristics:
+        return False
+    DYNAMIC_BASE = characteristics[0].DYNAMIC_BASE  # Get constant from any char object
+    return DYNAMIC_BASE in characteristics
 
 # Must support high-entropy 64-bit address space layout randomization
 # in addition to DYNAMIC_BASE to have secure ASLR.
 def check_PE_HIGH_ENTROPY_VA(binary) -> bool:
     '''PIE: DllCharacteristics bit 0x20 signifies high-entropy ASLR'''
-    return lief.PE.DLL_CHARACTERISTICS.HIGH_ENTROPY_VA in binary.optional_header.dll_characteristics_lists
+    characteristics = binary.optional_header.dll_characteristics_lists
+    if not characteristics:
+        return False
+    HIGH_ENTROPY_VA = characteristics[0].HIGH_ENTROPY_VA  # Get constant from any char object
+    return HIGH_ENTROPY_VA in characteristics
 
 def check_PE_RELOC_SECTION(binary) -> bool:
     '''Check for a reloc section. This is required for functional ASLR.'''
@@ -151,7 +161,8 @@ def check_MACHO_NOUNDEFS(binary) -> bool:
     '''
     Check for no undefined references.
     '''
-    return binary.header.has(lief.MachO.HEADER_FLAGS.NOUNDEFS)
+    NOUNDEFS = binary.header.FLAGS.NOUNDEFS if hasattr(binary.header, 'FLAGS') else None
+    return NOUNDEFS in binary.header.flags_list if NOUNDEFS is not None else False
 
 def check_MACHO_LAZY_BINDINGS(binary) -> bool:
     '''
@@ -177,7 +188,11 @@ def check_NX(binary) -> bool:
     '''
     Check for no stack execution
     '''
-    return binary.has_nx
+    if isinstance(binary, lief.MachO.Binary):
+        # For macOS, check heap and stack NX protection specifically
+        return binary.has_nx_heap and binary.has_nx_stack
+    else:
+        return binary.has_nx
 
 def check_MACHO_control_flow(binary) -> bool:
     '''
@@ -221,51 +236,48 @@ BASE_MACHO = [
     ('Canary', check_MACHO_Canary),
 ]
 
-CHECKS = {
-    lief.EXE_FORMATS.ELF: {
-        #lief.ARCHITECTURES.X86: BASE_ELF + [('CONTROL_FLOW', check_ELF_control_flow)],
-        # Note: until gcc8 or higher is used for release binaries,
-        # do not check for CONTROL_FLOW
-        lief.ARCHITECTURES.X86: BASE_ELF,
-        lief.ARCHITECTURES.ARM: BASE_ELF,
-        lief.ARCHITECTURES.ARM64: BASE_ELF,
-        lief.ARCHITECTURES.PPC: BASE_ELF,
-        lief.ARCHITECTURES.RISCV: BASE_ELF,
-    },
-    lief.EXE_FORMATS.PE: {
-        lief.ARCHITECTURES.X86: BASE_PE,
-    },
-    lief.EXE_FORMATS.MACHO: {
-        lief.ARCHITECTURES.X86: BASE_MACHO + [('PIE', check_PIE),
-                                              ('NX', check_NX),
-                                              #('CONTROL_FLOW', check_MACHO_control_flow)
-                                              # Note: Needs change in boost for -fcf-protection
-                                              ],
-        lief.ARCHITECTURES.ARM64: BASE_MACHO,
-    }
-}
+def get_arch_checks(binary):
+    """Get security checks based on binary format and architecture"""
+    if isinstance(binary, lief.ELF.Binary):
+        arch = binary.header.machine_type
+        if arch in [lief.ELF.ARCH.I386, lief.ELF.ARCH.X86_64]:
+            return BASE_ELF  # Remove CONTROL_FLOW until gcc8+
+        elif arch in [lief.ELF.ARCH.ARM, lief.ELF.ARCH.AARCH64, lief.ELF.ARCH.PPC, lief.ELF.ARCH.PPC64]:
+            return BASE_ELF
+        else:
+            return BASE_ELF
+    elif isinstance(binary, lief.PE.Binary):
+        return BASE_PE
+    elif isinstance(binary, lief.MachO.Binary):
+        arch = binary.header.cpu_type if hasattr(binary.header, 'cpu_type') else None
+        # Get the X86_64 constant from the cpu_type object
+        X86_64_TYPE = arch.X86_64 if arch and hasattr(arch, 'X86_64') else None
+        if arch == X86_64_TYPE:
+            return BASE_MACHO + [('PIE', check_PIE), ('NX', check_NX)]
+        else:
+            return BASE_MACHO
+    else:
+        return []
 
 if __name__ == '__main__':
     retval: int = 0
     for filename in sys.argv[1:]:
         try:
             binary = lief.parse(filename)
-            etype = binary.format
-            arch = binary.abstract.header.architecture
-            binary.concrete
-
-            if etype == lief.EXE_FORMATS.UNKNOWN:
-                print(f'{filename}: unknown executable format')
+            if binary is None:
+                print(f'{filename}: unable to parse')
                 retval = 1
                 continue
 
-            if arch == lief.ARCHITECTURES.NONE:
-                print(f'{filename}: unknown architecture')
+            # Get appropriate checks for this binary
+            checks = get_arch_checks(binary)
+            if not checks:
+                print(f'{filename}: unknown executable format or architecture')
                 retval = 1
                 continue
 
             failed: List[str] = []
-            for (name, func) in CHECKS[etype][arch]:
+            for (name, func) in checks:
                 if not func(binary):
                     failed.append(name)
             if failed:
