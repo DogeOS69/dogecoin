@@ -530,10 +530,22 @@ check-symbols: $(bin_PROGRAMS)
 	@echo "Checking glibc back compat..."
 	$(AM_V_at) $(PYTHON) $(top_srcdir)/contrib/devtools/symbol-check.py $(bin_PROGRAMS)
 
-check-security: $(bin_PROGRAMS)
+check-security:
 if HARDEN
 	@echo "Checking binary security..."
-	$(AM_V_at) $(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(bin_PROGRAMS)
+if TARGET_DARWIN
+	@if [ -f "$(top_builddir)/Dogecoin-Qt.app/Contents/MacOS/Dogecoin-Qt" ]; then \
+		echo "Found existing macOS app bundle, checking security..."; \
+		$(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(top_builddir)/Dogecoin-Qt.app/Contents/MacOS/Dogecoin-Qt; \
+	else \
+		echo "macOS app bundle not found, building binaries first..."; \
+		$(MAKE) $(AM_MAKEFLAGS) $(bin_PROGRAMS) && \
+		$(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(bin_PROGRAMS); \
+	fi
+else
+	@$(MAKE) $(AM_MAKEFLAGS) $(bin_PROGRAMS)
+	@$(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(bin_PROGRAMS)
+endif
 endif
 
 %.pb.cc %.pb.h: %.proto
@@ -626,15 +638,18 @@ $(ZKP_VERIFIER_LIB): $(top_srcdir)/src/zkp-verifier/src/lib.rs $(top_srcdir)/src
 	@cd $(top_srcdir)/src/zkp-verifier && \
 	if [ "$(RUST_TARGET)" != "$(host_alias)" ] && [ "$(RUST_TARGET)" != "" ]; then \
 		echo "Cross-compiling for $(RUST_TARGET)"; \
+		PATH="$(abs_top_builddir)/depends/$(host)/native/bin:$$PATH" \
+		MACOSX_DEPLOYMENT_TARGET=10.8 \
 		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) \
 		CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
 		CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
 		CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc \
 		CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=i686-w64-mingw32-gcc \
 		CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
-		CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=clang \
-		CXX_x86_64_apple_darwin=x86_64-apple-darwin11-clang++ \
-		CC_x86_64_apple_darwin=x86_64-apple-darwin11-clang \
+		CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$(abs_top_builddir)/depends/$(host)/native/bin/x86_64-apple-darwin11-clang++" \
+		CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-target -C link-arg=x86_64-apple-darwin11 -C link-arg=-mmacosx-version-min=10.8 -C link-arg=--sysroot -C link-arg=$(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk -C link-arg=-stdlib=libc++ -C link-arg=-L$(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk/usr/lib -C link-arg=-F$(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk/System/Library/Frameworks" \
+		CXX_x86_64_apple_darwin="x86_64-apple-darwin11-clang++ -target x86_64-apple-darwin11 -mmacosx-version-min=10.8 --sysroot $(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk -stdlib=libc++" \
+		CC_x86_64_apple_darwin="x86_64-apple-darwin11-clang -target x86_64-apple-darwin11 -mmacosx-version-min=10.8 --sysroot $(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk" \
 		AR_x86_64_apple_darwin=x86_64-apple-darwin11-ar \
 		CXX_i686_pc_windows_gnu=i686-w64-mingw32-g++ \
 		CC_i686_pc_windows_gnu=i686-w64-mingw32-gcc \
@@ -643,7 +658,7 @@ $(ZKP_VERIFIER_LIB): $(top_srcdir)/src/zkp-verifier/src/lib.rs $(top_srcdir)/src
 		CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
 		AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar \
 		RUSTFLAGS="$$(if echo "$(RUST_TARGET)" | grep -q windows; then echo "-C panic=unwind -C lto=off -C link-arg=-lgcc_eh -C link-arg=-lgcc_s -C link-arg=-lpthread"; fi)" \
-		cargo build --release --target $(RUST_TARGET) || echo "Warning: Rust build failed"; \
+		cargo build --release --target $(RUST_TARGET) || { echo "ERROR: Rust ZKP build failed for target $(RUST_TARGET)"; exit 1; }; \
 		mkdir -p $(CARGO_TARGET_DIR)/release && \
 		if echo "$(RUST_TARGET)" | grep -q "windows"; then \
 			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dll.a $@ 2>/dev/null || true; \

@@ -213,6 +213,19 @@ dogecoin_test_clean : FORCE
 	rm -f $(CLEAN_BITCOIN_TEST) $(test_test_dogecoin_OBJECTS) $(TEST_BINARY)
 
 check-local:
+	@echo "Preparing test environment..."
+if TARGET_WINDOWS
+	@echo "Copying ZKP verifier DLL for Windows tests..."
+	$(AM_V_at)if [ -f "$(abs_top_builddir)/depends/$(host)/cargo-target/release/zkp_verifier.dll" ]; then \
+		cp "$(abs_top_builddir)/depends/$(host)/cargo-target/release/zkp_verifier.dll" test/ 2>/dev/null || true; \
+		cp "$(abs_top_builddir)/depends/$(host)/cargo-target/release/zkp_verifier.dll" qt/test/ 2>/dev/null || true; \
+		cp "$(abs_top_builddir)/depends/$(host)/cargo-target/release/zkp_verifier.dll" . 2>/dev/null || true; \
+	elif [ -f "$(abs_top_builddir)/depends/$(host)/cargo-target/$(RUST_TARGET)/release/zkp_verifier.dll" ]; then \
+		cp "$(abs_top_builddir)/depends/$(host)/cargo-target/$(RUST_TARGET)/release/zkp_verifier.dll" test/ 2>/dev/null || true; \
+		cp "$(abs_top_builddir)/depends/$(host)/cargo-target/$(RUST_TARGET)/release/zkp_verifier.dll" qt/test/ 2>/dev/null || true; \
+		cp "$(abs_top_builddir)/depends/$(host)/cargo-target/$(RUST_TARGET)/release/zkp_verifier.dll" . 2>/dev/null || true; \
+	fi
+endif
 	@echo "Running test/bitcoin-util-test.py..."
 	$(AM_V_at)srcdir=$(srcdir) PYTHONPATH=$(builddir)/test $(PYTHON) $(srcdir)/test/bitcoin-util-test.py
 	$(AM_V_at)$(MAKE) $(AM_MAKEFLAGS) -C secp256k1 check
