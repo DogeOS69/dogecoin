@@ -25,7 +25,12 @@
 
 import struct
 import socket
-import asyncore
+try:
+    import asyncore
+except ImportError:
+    # Python 3.12+ compatibility
+    import asyncore as asyncore_fallback
+    import pyasyncore as asyncore
 import time
 import sys
 import random
@@ -37,7 +42,7 @@ from threading import RLock
 from threading import Thread
 import logging
 import copy
-import ltc_scrypt
+import scrypt
 from test_framework.siphash import siphash256
 
 BIP0031_VERSION = 60000
@@ -588,7 +593,9 @@ class CBlockHeader(object):
             r += struct.pack("<I", self.nNonce)
             self.sha256 = uint256_from_str(hash256(r))
             self.hash = encode(hash256(r)[::-1], 'hex_codec').decode('ascii')
-            self.scrypt256 = uint256_from_str(ltc_scrypt.getPoWHash(r))
+            # Use scrypt with Litecoin/Dogecoin parameters: N=1024, r=1, p=1, buflen=32
+            scrypt_hash = scrypt.hash(r, r, N=1024, r=1, p=1, buflen=32)
+            self.scrypt256 = uint256_from_str(scrypt_hash)
 
     def rehash(self):
         self.sha256 = None
