@@ -1,0 +1,8 @@
+--- a/genisoimage/genisoimage.h
++++ b/genisoimage/genisoimage.h
+@@ -379,4 +379,4 @@
+-char		*outfile;
++extern char	*outfile;
+ 
+ #define	JMAX		64	/* maximum Joliet file name length (spec) */
+ #define	JLONGMAX	103	/* out of spec Joliet file name length */
