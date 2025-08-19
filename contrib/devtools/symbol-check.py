@@ -38,24 +38,32 @@ import lief #type:ignore
 #   (glibc)    GLIBC_2_11
 
 MAX_VERSIONS = {
-'GCC':       (4,4,0),
+'GCC':       (14,0,0),  # Ubuntu 24.04 compatibility (GCC 14)
 'GLIBC': {
-    lief.ELF.ARCH.X86_64: (2,11),
-    lief.ELF.ARCH.I386:   (2,11),
-    lief.ELF.ARCH.ARM:    (2,11),
-    lief.ELF.ARCH.AARCH64:(2,17),
-    lief.ELF.ARCH.PPC64:  (2,17),
-    lief.ELF.ARCH.RISCV:  (2,27),
+    lief.ELF.ARCH.X86_64: (2,39),   # Ubuntu 24.04 compatibility
+    lief.ELF.ARCH.I386:   (2,39),   # Ubuntu 24.04 compatibility  
+    lief.ELF.ARCH.ARM:    (2,39),   # Ubuntu 24.04 compatibility
+    lief.ELF.ARCH.AARCH64:(2,39),   # Ubuntu 24.04 compatibility
+    lief.ELF.ARCH.PPC64:  (2,39),   # Ubuntu 24.04 compatibility
+    lief.ELF.ARCH.RISCV:  (2,39),   # Ubuntu 24.04 compatibility
 },
-'CXXABI':  (1,3,3),
-'GLIBCXX': (3,4,13),
-'V':         (0,5,0),  # xkb (dogecoin-qt only)
+'CXXABI':  (1,3,13),    # Ubuntu 24.04 compatibility (GCC 13)
+'GLIBCXX': (3,4,32),    # Ubuntu 24.04 compatibility (GCC 13)
+'V':         (0,5,0),   # xkb (dogecoin-qt only)
 }
 
 # Ignore symbols that are exported as part of every executable
 IGNORE_EXPORTS = {
   '_edata', '_end', '_init', '__bss_start', '_fini', '_IO_stdin_used',
-  'stdin', 'stdout', 'stderr'
+  'stdin', 'stdout', 'stderr',
+  # Ubuntu 24.04 toolchain exports (GCC 13/14 + glibc 2.39)
+  '__fdelt_warn', '__fdelt_chk', 'memcpy',
+  # C++ standard library symbols (libstdc++.so.6)
+  '_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEED0Ev',
+  '_ZNKSt5ctypeIcE9do_narrowEcc',
+  '_ZNKSt5ctypeIcE8do_widenEc', 
+  '_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEED1Ev',
+  '_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEED2Ev'
 }
 
 # Expected linker-loader names can be found here:
@@ -74,6 +82,7 @@ ELF_ALLOWED_LIBRARIES = {
 # dogecoind and dogecoin-qt
 'libgcc_s.so.1', # GCC base support
 'libc.so.6', # C library
+'libstdc++.so.6', # C++ standard library (Ubuntu 24.04)
 'libpthread.so.0', # threading
 'libanl.so.1', # DNS resolve
 'libm.so.6', # math library
