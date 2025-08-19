@@ -33,9 +33,12 @@ def check_ELF_RELRO(binary) -> bool:
 
     have_bindnow = False
     try:
-        flags = binary.get(lief.ELF.DYNAMIC_TAGS.FLAGS)
-        if flags.value & lief.ELF.DYNAMIC_FLAGS.BIND_NOW:
-            have_bindnow = True
+        # Check FLAGS entry in dynamic section using new lief API
+        for entry in binary.dynamic_entries:
+            if entry.tag.name == 'FLAGS' and hasattr(entry, 'FLAG'):
+                if entry.has(entry.FLAG.BIND_NOW):
+                    have_bindnow = True
+                    break
     except:
         have_bindnow = False
 
