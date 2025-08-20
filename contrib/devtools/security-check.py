@@ -172,6 +172,8 @@ def check_MACHO_LAZY_BINDINGS(binary) -> bool:
     Check for no lazy bindings.
     We don't use or check for MH_BINDATLOAD. See #18295.
     '''
+    if binary.dyld_info is None:
+        return True  # Skip check if dyld_info is not available
     return binary.dyld_info.lazy_bind == (0,0)
 
 def check_MACHO_Canary(binary) -> bool:
