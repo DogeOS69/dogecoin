@@ -670,15 +670,21 @@ $(ZKP_VERIFIER_LIB): $(top_srcdir)/src/zkp-verifier/src/lib.rs $(top_srcdir)/src
 			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.so $@ || { echo "ERROR: Failed to copy ZKP library"; exit 1; }; \
 		fi; \
 	else \
-		echo "Native build for $(host_alias)"; \
+		echo "Native build for $(host_os)"; \
 		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) RUSTFLAGS="$$WINDOWS_RUSTFLAGS" cargo build --release || { echo "ERROR: Rust ZKP build failed for native target"; exit 1; }; \
-		if echo "$(host_alias)" | grep -q "mingw"; then \
-			cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.dll.a $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+		if echo "$(host_os)" | grep -q "mingw"; then \
+			if [ "$(CARGO_TARGET_DIR)/release/libzkp_verifier.dll.a" != "$@" ]; then \
+				cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.dll.a $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+			fi; \
 			cp $(CARGO_TARGET_DIR)/release/zkp_verifier.dll $(CARGO_TARGET_DIR)/release/ || { echo "ERROR: Failed to copy native ZKP DLL"; exit 1; }; \
-		elif echo "$(host_alias)" | grep -q "darwin"; then \
-			cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.dylib $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+		elif echo "$(host_os)" | grep -q "darwin"; then \
+			if [ "$(CARGO_TARGET_DIR)/release/libzkp_verifier.dylib" != "$@" ]; then \
+				cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.dylib $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+			fi; \
 		else \
-			cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.so $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+			if [ "$(CARGO_TARGET_DIR)/release/libzkp_verifier.so" != "$@" ]; then \
+				cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.so $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+			fi; \
 		fi; \
 	fi
 	@touch $@
