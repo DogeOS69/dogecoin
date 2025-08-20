@@ -186,7 +186,6 @@ jobs:
             container: ubuntu:24.04
             packages: cmake imagemagick libcap-dev librsvg2-bin zlib1g-dev libbz2-dev libtiff-tools libtinfo6 xorriso
             postinstall: |
-              apt-get update
               ln -sf /lib/x86_64-linux-gnu/libtinfo.so.6 /lib/x86_64-linux-gnu/libtinfo.so.5
             run-bench: false
             check-security: true

@@ -538,7 +538,7 @@ if TARGET_DARWIN
 		echo "Found existing macOS app bundle, checking security..."; \
 		$(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(top_builddir)/Dogecoin-Qt.app/Contents/MacOS/Dogecoin-Qt; \
 	else \
-		echo "macOS app bundle not found, building binaries first..."; \
+		echo "Building macOS binaries for security check..."; \
 		$(MAKE) $(AM_MAKEFLAGS) $(bin_PROGRAMS) && \
 		$(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(bin_PROGRAMS); \
 	fi
@@ -636,6 +636,7 @@ $(ZKP_VERIFIER_LIB): $(top_srcdir)/src/zkp-verifier/src/lib.rs $(top_srcdir)/src
 	@echo "Building Rust ZKP verifier shared library for target $(RUST_TARGET)..."
 	@mkdir -p $(CARGO_TARGET_DIR)
 	@cd $(top_srcdir)/src/zkp-verifier && \
+	WINDOWS_RUSTFLAGS="$$(if echo "$(RUST_TARGET)" | grep -q windows; then echo "-C panic=unwind -C lto=off -C link-arg=-lgcc_eh -C link-arg=-lgcc_s -C link-arg=-lpthread"; fi)"; \
 	if [ "$(RUST_TARGET)" != "$(host_alias)" ] && [ "$(RUST_TARGET)" != "" ]; then \
 		echo "Cross-compiling for $(RUST_TARGET)"; \
 		PATH="$(abs_top_builddir)/depends/$(host)/native/bin:$$PATH" \
@@ -657,21 +658,28 @@ $(ZKP_VERIFIER_LIB): $(top_srcdir)/src/zkp-verifier/src/lib.rs $(top_srcdir)/src
 		CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++ \
 		CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
 		AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar \
-		RUSTFLAGS="$$(if echo "$(RUST_TARGET)" | grep -q windows; then echo "-C panic=unwind -C lto=off -C link-arg=-lgcc_eh -C link-arg=-lgcc_s -C link-arg=-lpthread"; fi)" \
+		RUSTFLAGS="$$WINDOWS_RUSTFLAGS" \
 		cargo build --release --target $(RUST_TARGET) || { echo "ERROR: Rust ZKP build failed for target $(RUST_TARGET)"; exit 1; }; \
 		mkdir -p $(CARGO_TARGET_DIR)/release && \
 		if echo "$(RUST_TARGET)" | grep -q "windows"; then \
-			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dll.a $@ 2>/dev/null || true; \
-			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/zkp_verifier.dll $(CARGO_TARGET_DIR)/release/ 2>/dev/null || true; \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dll.a $@ || { echo "ERROR: Failed to copy ZKP library"; exit 1; }; \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/zkp_verifier.dll $(CARGO_TARGET_DIR)/release/ || { echo "ERROR: Failed to copy ZKP DLL"; exit 1; }; \
 		elif echo "$(RUST_TARGET)" | grep -q "darwin"; then \
-			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dylib $@ 2>/dev/null || true; \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dylib $@ || { echo "ERROR: Failed to copy ZKP library"; exit 1; }; \
 		else \
-			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.so $@ 2>/dev/null || true; \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.so $@ || { echo "ERROR: Failed to copy ZKP library"; exit 1; }; \
 		fi; \
 	else \
 		echo "Native build for $(host_alias)"; \
-		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) RUSTFLAGS="$$(if echo "$(RUST_TARGET)" | grep -q windows; then echo "-C panic=unwind -C lto=off -C link-arg=-lgcc_eh -C link-arg=-lgcc_s -C link-arg=-lpthread"; fi)" cargo build --release || echo "Warning: Rust build failed"; \
-		cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.so $@ 2>/dev/null || true; \
+		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) RUSTFLAGS="$$WINDOWS_RUSTFLAGS" cargo build --release || { echo "ERROR: Rust ZKP build failed for native target"; exit 1; }; \
+		if echo "$(host_alias)" | grep -q "mingw"; then \
+			cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.dll.a $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+			cp $(CARGO_TARGET_DIR)/release/zkp_verifier.dll $(CARGO_TARGET_DIR)/release/ || { echo "ERROR: Failed to copy native ZKP DLL"; exit 1; }; \
+		elif echo "$(host_alias)" | grep -q "darwin"; then \
+			cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.dylib $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+		else \
+			cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.so $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+		fi; \
 	fi
 	@touch $@
 
