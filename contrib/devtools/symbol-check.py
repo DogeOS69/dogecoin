@@ -57,7 +57,7 @@ IGNORE_EXPORTS = {
   '_edata', '_end', '_init', '__bss_start', '_fini', '_IO_stdin_used',
   'stdin', 'stdout', 'stderr',
   # Ubuntu 24.04 toolchain exports (GCC 13/14 + glibc 2.39)
-  '__fdelt_warn', '__fdelt_chk', 'memcpy',
+  '__fdelt_warn', '__fdelt_chk', 'memcpy', '__libc_single_threaded',
   # C++ standard library symbols (libstdc++.so.6)
   '_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEED0Ev',
   '_ZNKSt5ctypeIcE9do_narrowEcc',
