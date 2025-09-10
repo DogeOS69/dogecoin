@@ -466,6 +466,11 @@ if GLIBC_BACK_COMPAT
 endif
 
 libdogecoinconsensus_la_LDFLAGS = $(AM_LDFLAGS) -no-undefined $(RELDFLAGS)
+
+if TARGET_WINDOWS
+libdogecoinconsensus_la_LDFLAGS += -Wl,--allow-multiple-definition
+endif
+
 libdogecoinconsensus_la_LIBADD = $(LIBSECP256K1) $(LIBBLS)
 libdogecoinconsensus_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(builddir)/obj -I$(srcdir)/secp256k1/include -I$(srcdir)/bls12-381/include -DBUILD_BITCOIN_INTERNAL
 libdogecoinconsensus_la_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
@@ -513,6 +518,8 @@ clean-local:
 	-rm -f leveldb/*/*.gcda leveldb/*/*.gcno leveldb/helpers/memenv/*.gcda leveldb/helpers/memenv/*.gcno
 	-rm -f config.h
 	-rm -rf test/__pycache__
+	-rm -rf $(CARGO_TARGET_DIR)
+	-rm -f $(ZKP_VERIFIER_LIB)
 
 .rc.o:
 	@test -f $(WINDRES)
@@ -523,10 +530,22 @@ check-symbols: $(bin_PROGRAMS)
 	@echo "Checking glibc back compat..."
 	$(AM_V_at) $(PYTHON) $(top_srcdir)/contrib/devtools/symbol-check.py $(bin_PROGRAMS)
 
-check-security: $(bin_PROGRAMS)
+check-security:
 if HARDEN
 	@echo "Checking binary security..."
-	$(AM_V_at) $(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(bin_PROGRAMS)
+if TARGET_DARWIN
+	@if [ -f "$(top_builddir)/Dogecoin-Qt.app/Contents/MacOS/Dogecoin-Qt" ]; then \
+		echo "Found existing macOS app bundle, checking security..."; \
+		$(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(top_builddir)/Dogecoin-Qt.app/Contents/MacOS/Dogecoin-Qt; \
+	else \
+		echo "Building macOS binaries for security check..."; \
+		$(MAKE) $(AM_MAKEFLAGS) $(bin_PROGRAMS) && \
+		$(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(bin_PROGRAMS); \
+	fi
+else
+	@$(MAKE) $(AM_MAKEFLAGS) $(bin_PROGRAMS)
+	@$(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(bin_PROGRAMS)
+endif
 endif
 
 %.pb.cc %.pb.h: %.proto
@@ -558,41 +577,141 @@ endif
 # ZKP Verifier Rust library integration
 if HAVE_RUST
 
+# Map autotools host triplet to Rust target triplet
+RUST_TARGET_MAP_aarch64_linux_gnu = aarch64-unknown-linux-gnu
+RUST_TARGET_MAP_arm_linux_gnueabihf = armv7-unknown-linux-gnueabihf
+RUST_TARGET_MAP_i686_pc_linux_gnu = i686-unknown-linux-gnu
+RUST_TARGET_MAP_x86_64_unknown_linux_gnu = x86_64-unknown-linux-gnu
+RUST_TARGET_MAP_i686_w64_mingw32 = i686-pc-windows-gnu
+RUST_TARGET_MAP_x86_64_w64_mingw32 = x86_64-pc-windows-gnu
+RUST_TARGET_MAP_x86_64_apple_darwin11 = x86_64-apple-darwin
+RUST_TARGET_MAP_aarch64_apple_darwin = aarch64-apple-darwin
+
+# Determine Rust target - fallback to host if no mapping exists
+RUST_TARGET = $(or $(RUST_TARGET_MAP_$(subst -,_,$(host_alias))),$(host_alias))
+
+# Set Cargo target directory according to build system pattern
+CARGO_TARGET_DIR = $(abs_top_builddir)/depends/$(host_alias)/cargo-target
+
 # Define paths and includes
-ZKP_INCLUDE = -I$(top_srcdir)/src/zkp-verifier/include -I$(top_srcdir)/src/zkp-verifier/target/cxxbridge
+ZKP_INCLUDE = -I$(top_srcdir)/src/zkp-verifier/include
 # Use platform-specific shared library extension
 if TARGET_DARWIN
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.dylib
+ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/libzkp_verifier.dylib
 else
 if TARGET_WINDOWS
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/zkp_verifier.dll
+# Link against the import library for the DLL on MinGW targets
+ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/libzkp_verifier.dll.a
 else
-ZKP_VERIFIER_LIB = $(top_srcdir)/src/zkp-verifier/target/release/libzkp_verifier.so
+ZKP_VERIFIER_LIB = $(CARGO_TARGET_DIR)/release/libzkp_verifier.so
 endif
 endif
 
 # Add include paths
 AM_CPPFLAGS += $(ZKP_INCLUDE)
 
-# Add temporary stub implementation
+# Compute GCC_LIBDIR with fallback for CI
+GCC_LIBDIR = $(shell $(host_alias)-g++ -print-libgcc-file-name | xargs dirname || echo "/usr/lib/gcc/$(host_alias)/10")
+
+# For Windows, add flag to allow multiple definitions in static link
+if TARGET_WINDOWS
+dogecoind_LDFLAGS += -Wl,--allow-multiple-definition -lbcrypt -luserenv -lntdll
+dogecoin_tx_LDFLAGS += -Wl,--allow-multiple-definition
+endif
+
+# Gate stub inclusion: exclude for Windows to avoid C++ runtime conflicts
+if TARGET_WINDOWS
+# no stub for Windows: rely on Rust C ABI
+else
 libdogecoin_consensus_a_SOURCES += zkp_stub.cpp
+endif
 
-# Build Rust library before linking
-.PHONY: build-zkp-verifier
-build-zkp-verifier:
-	@echo "Building Rust ZKP verifier shared library..."
-	cd $(top_srcdir)/src/zkp-verifier && cargo build --release || echo "Warning: Rust build failed"
-
-# Ensure ZKP library is built before linking
-$(ZKP_VERIFIER_LIB): build-zkp-verifier
-
-# Add ZKP library to executables and shared libraries
-dogecoind_LDADD += $(ZKP_VERIFIER_LIB)
-dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIB)
-
-# Add ZKP library to consensus library (now safe since it's a shared library)
+# Add explicit dependency for consensus lib on ZKP lib if BUILD_BITCOIN_LIBS
 if BUILD_BITCOIN_LIBS
 libdogecoinconsensus_la_LIBADD += $(ZKP_VERIFIER_LIB)
+endif
+
+# Make library the target, add Rust sources as prereqs
+$(ZKP_VERIFIER_LIB): $(top_srcdir)/src/zkp-verifier/src/lib.rs $(top_srcdir)/src/zkp-verifier/Cargo.toml
+	@echo "Building Rust ZKP verifier shared library for target $(RUST_TARGET)..."
+	@mkdir -p $(CARGO_TARGET_DIR)
+	@cd $(top_srcdir)/src/zkp-verifier && \
+	WINDOWS_RUSTFLAGS="$$(if echo "$(RUST_TARGET)" | grep -q windows; then echo "-C panic=unwind -C lto=off -C link-arg=-lgcc_eh -C link-arg=-lgcc_s -C link-arg=-lpthread"; fi)"; \
+	if [ "$(RUST_TARGET)" != "$(host_alias)" ] && [ "$(RUST_TARGET)" != "" ]; then \
+		echo "Cross-compiling for $(RUST_TARGET)"; \
+		PATH="$(abs_top_builddir)/depends/$(host)/native/bin:$$PATH" \
+		MACOSX_DEPLOYMENT_TARGET=10.8 \
+		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) \
+		CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+		CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+		CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc \
+		CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=i686-w64-mingw32-gcc \
+		CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+		CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$(abs_top_builddir)/depends/$(host)/native/bin/x86_64-apple-darwin11-clang++" \
+		CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-target -C link-arg=x86_64-apple-darwin11 -C link-arg=-mmacosx-version-min=10.8 -C link-arg=--sysroot -C link-arg=$(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk -C link-arg=-stdlib=libc++ -C link-arg=-L$(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk/usr/lib -C link-arg=-F$(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk/System/Library/Frameworks" \
+		CXX_x86_64_apple_darwin="x86_64-apple-darwin11-clang++ -target x86_64-apple-darwin11 -mmacosx-version-min=10.8 --sysroot $(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk -stdlib=libc++" \
+		CC_x86_64_apple_darwin="x86_64-apple-darwin11-clang -target x86_64-apple-darwin11 -mmacosx-version-min=10.8 --sysroot $(abs_top_builddir)/depends/SDKs/MacOSX10.11.sdk" \
+		AR_x86_64_apple_darwin=x86_64-apple-darwin11-ar \
+		CXX_i686_pc_windows_gnu=i686-w64-mingw32-g++ \
+		CC_i686_pc_windows_gnu=i686-w64-mingw32-gcc \
+		AR_i686_pc_windows_gnu=i686-w64-mingw32-ar \
+		CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++ \
+		CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
+		AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar \
+		RUSTFLAGS="$$WINDOWS_RUSTFLAGS" \
+		cargo build --release --target $(RUST_TARGET) || { echo "ERROR: Rust ZKP build failed for target $(RUST_TARGET)"; exit 1; }; \
+		mkdir -p $(CARGO_TARGET_DIR)/release && \
+		if echo "$(RUST_TARGET)" | grep -q "windows"; then \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dll.a $@ || { echo "ERROR: Failed to copy ZKP library"; exit 1; }; \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/zkp_verifier.dll $(CARGO_TARGET_DIR)/release/ || { echo "ERROR: Failed to copy ZKP DLL"; exit 1; }; \
+		elif echo "$(RUST_TARGET)" | grep -q "darwin"; then \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.dylib $@ || { echo "ERROR: Failed to copy ZKP library"; exit 1; }; \
+		else \
+			cp $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/libzkp_verifier.so $@ || { echo "ERROR: Failed to copy ZKP library"; exit 1; }; \
+		fi; \
+	else \
+		echo "Native build for $(host_os)"; \
+		CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) RUSTFLAGS="$$WINDOWS_RUSTFLAGS" cargo build --release || { echo "ERROR: Rust ZKP build failed for native target"; exit 1; }; \
+		if echo "$(host_os)" | grep -q "mingw"; then \
+			if [ "$(CARGO_TARGET_DIR)/release/libzkp_verifier.dll.a" != "$@" ]; then \
+				cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.dll.a $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+			fi; \
+			cp $(CARGO_TARGET_DIR)/release/zkp_verifier.dll $(CARGO_TARGET_DIR)/release/ || { echo "ERROR: Failed to copy native ZKP DLL"; exit 1; }; \
+		elif echo "$(host_os)" | grep -q "darwin"; then \
+			if [ "$(CARGO_TARGET_DIR)/release/libzkp_verifier.dylib" != "$@" ]; then \
+				cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.dylib $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+			fi; \
+		else \
+			if [ "$(CARGO_TARGET_DIR)/release/libzkp_verifier.so" != "$@" ]; then \
+				cp $(CARGO_TARGET_DIR)/release/libzkp_verifier.so $@ || { echo "ERROR: Failed to copy native ZKP library"; exit 1; }; \
+			fi; \
+		fi; \
+	fi
+	@touch $@
+
+# $(ZKP_VERIFIER_LIB): $(ZKP_STAMP)
+
+# Add ZKP library to executables and shared libraries
+if TARGET_WINDOWS
+dogecoind_LDADD += $(ZKP_VERIFIER_LIB)
+dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIB)
+if BUILD_BITCOIN_LIBS
+libdogecoinconsensus_la_LIBADD += $(ZKP_VERIFIER_LIB)
+endif
+else
+if TARGET_DARWIN
+dogecoind_LDADD += $(ZKP_VERIFIER_LIB)
+dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIB)
+if BUILD_BITCOIN_LIBS
+libdogecoinconsensus_la_LDFLAGS += -L$(CARGO_TARGET_DIR)/release -lzkp_verifier
+endif
+else
+dogecoind_LDADD += $(ZKP_VERIFIER_LIB)
+dogecoin_tx_LDADD += $(ZKP_VERIFIER_LIB)
+if BUILD_BITCOIN_LIBS
+libdogecoinconsensus_la_LIBADD += $(ZKP_VERIFIER_LIB)
+endif
+endif
 endif
 
 else

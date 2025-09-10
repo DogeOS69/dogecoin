@@ -1,0 +1,57 @@
+--- a/py-compile
++++ b/py-compile
+@@ -116,7 +116,15 @@
+ esac
+ 
+ $PYTHON -c "
+-import sys, os, py_compile, imp
++import sys, os, py_compile
++try:
++    # Python 3.12+ - imp module removed, use importlib
++    import importlib.util
++    cache_from_source = importlib.util.cache_from_source
++except ImportError:
++    # Python < 3.12 - use imp module
++    import imp
++    cache_from_source = imp.cache_from_source
+ 
+ files = '''$files'''
+ 
+@@ -130,5 +138,5 @@
+     sys.stdout.write(file)
+     sys.stdout.flush()
+-    if hasattr(imp, 'get_tag'):
+-        py_compile.compile(filepath, imp.cache_from_source(filepath), path)
+-    else:
++    try:
++        py_compile.compile(filepath, cache_from_source(filepath), path)
++    except (AttributeError, NameError):
+         py_compile.compile(filepath, filepath + 'c', path)
+ sys.stdout.write('\n')" || exit $?
+@@ -138,7 +146,15 @@
+ # this will fail for python < 1.5, but that doesn't matter ...
+ $PYTHON -O -c "
+-import sys, os, py_compile, imp
++import sys, os, py_compile
++try:
++    # Python 3.12+ - imp module removed, use importlib  
++    import importlib.util
++    cache_from_source = importlib.util.cache_from_source
++except ImportError:
++    # Python < 3.12 - use imp module
++    import imp
++    cache_from_source = imp.cache_from_source
+ 
+ # pypy does not use .pyo optimization
+ if hasattr(sys, 'pypy_translation_info'):
+@@ -154,5 +170,5 @@
+     sys.stdout.write(file)
+     sys.stdout.flush()
+-    if hasattr(imp, 'get_tag'):
+-        py_compile.compile(filepath, imp.cache_from_source(filepath, False), path)
+-    else:
++    try:
++        py_compile.compile(filepath, cache_from_source(filepath, False), path)
++    except (AttributeError, NameError):
+         py_compile.compile(filepath, filepath + 'o', path)
+ sys.stdout.write('\n')" 2>/dev/null || :

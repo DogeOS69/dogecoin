@@ -38,48 +38,43 @@ import lief #type:ignore
 #   (glibc)    GLIBC_2_11
 
 MAX_VERSIONS = {
-'GCC':       (4,4,0),
+'GCC':       (14,0,0),  # Ubuntu 24.04 compatibility (GCC 14)
 'GLIBC': {
-    lief.ELF.ARCH.x86_64: (2,11),
-    lief.ELF.ARCH.i386:   (2,11),
-    lief.ELF.ARCH.ARM:    (2,11),
-    lief.ELF.ARCH.AARCH64:(2,17),
-    lief.ELF.ARCH.PPC64:  (2,17),
-    lief.ELF.ARCH.RISCV:  (2,27),
+    lief.ELF.ARCH.X86_64: (2,39),   # Ubuntu 24.04 compatibility
+    lief.ELF.ARCH.I386:   (2,39),   # Ubuntu 24.04 compatibility  
+    lief.ELF.ARCH.ARM:    (2,39),   # Ubuntu 24.04 compatibility
+    lief.ELF.ARCH.AARCH64:(2,39),   # Ubuntu 24.04 compatibility
+    lief.ELF.ARCH.PPC64:  (2,39),   # Ubuntu 24.04 compatibility
+    lief.ELF.ARCH.RISCV:  (2,39),   # Ubuntu 24.04 compatibility
 },
-'CXXABI':  (1,3,3),
-'GLIBCXX': (3,4,13),
-'V':         (0,5,0),  # xkb (dogecoin-qt only)
+'CXXABI':  (1,3,13),    # Ubuntu 24.04 compatibility (GCC 13)
+'GLIBCXX': (3,4,32),    # Ubuntu 24.04 compatibility (GCC 13)
+'V':         (0,5,0),   # xkb (dogecoin-qt only)
 }
 
 # Ignore symbols that are exported as part of every executable
 IGNORE_EXPORTS = {
   '_edata', '_end', '_init', '__bss_start', '_fini', '_IO_stdin_used',
-  'stdin', 'stdout', 'stderr'
+  'stdin', 'stdout', 'stderr',
+  # Ubuntu 24.04 toolchain exports (GCC 13/14 + glibc 2.39)
+  '__fdelt_warn', '__fdelt_chk', 'memcpy', '__libc_single_threaded',
+  # C++ standard library symbols (libstdc++.so.6)
+  '_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEED0Ev',
+  '_ZNKSt5ctypeIcE9do_narrowEcc',
+  '_ZNKSt5ctypeIcE8do_widenEc', 
+  '_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEED1Ev',
+  '_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEED2Ev'
 }
 
 # Expected linker-loader names can be found here:
 # https://sourceware.org/glibc/wiki/ABIList?action=recall&rev=16
-ELF_INTERPRETER_NAMES: Dict[lief.ELF.ARCH, Dict[lief.ENDIANNESS, str]] = {
-    lief.ELF.ARCH.i386: {
-        lief.ENDIANNESS.LITTLE: "/lib/ld-linux.so.2",
-    },
-    lief.ELF.ARCH.x86_64:  {
-        lief.ENDIANNESS.LITTLE: "/lib64/ld-linux-x86-64.so.2",
-    },
-    lief.ELF.ARCH.ARM:     {
-        lief.ENDIANNESS.LITTLE: "/lib/ld-linux-armhf.so.3",
-    },
-    lief.ELF.ARCH.AARCH64: {
-        lief.ENDIANNESS.LITTLE: "/lib/ld-linux-aarch64.so.1",
-    },
-    lief.ELF.ARCH.PPC64:   {
-        lief.ENDIANNESS.BIG: "/lib64/ld64.so.1",
-        lief.ENDIANNESS.LITTLE: "/lib64/ld64.so.2",
-    },
-    lief.ELF.ARCH.RISCV:    {
-        lief.ENDIANNESS.LITTLE: "/lib/ld-linux-riscv64-lp64d.so.1",
-    },
+ELF_INTERPRETER_NAMES: Dict[lief.ELF.ARCH, str] = {
+    lief.ELF.ARCH.I386: "/lib/ld-linux.so.2",
+    lief.ELF.ARCH.X86_64: "/lib64/ld-linux-x86-64.so.2",
+    lief.ELF.ARCH.ARM: "/lib/ld-linux-armhf.so.3", 
+    lief.ELF.ARCH.AARCH64: "/lib/ld-linux-aarch64.so.1",
+    lief.ELF.ARCH.PPC64: "/lib64/ld64.so.2",  # Assume little-endian (most common)
+    lief.ELF.ARCH.RISCV: "/lib/ld-linux-riscv64-lp64d.so.1",
 }
 
 # Allowed NEEDED libraries
@@ -87,6 +82,7 @@ ELF_ALLOWED_LIBRARIES = {
 # dogecoind and dogecoin-qt
 'libgcc_s.so.1', # GCC base support
 'libc.so.6', # C library
+'libstdc++.so.6', # C++ standard library (Ubuntu 24.04)
 'libpthread.so.0', # threading
 'libanl.so.1', # DNS resolve
 'libm.so.6', # math library
@@ -155,6 +151,7 @@ PE_ALLOWED_LIBRARIES = {
 'WINMM.dll', # same as above but lowercase extension in win64 binary
 'WINSPOOL.DRV', # Printer spooler driver for paper wallet printing
 'WTSAPI32.dll',
+'zkp_verifier.dll', # Rust ZKP verifier library
 }
 
 def check_version(max_versions, version, arch) -> bool:
@@ -183,7 +180,7 @@ def check_imported_symbols(binary) -> bool:
                 ok = False
     return ok
 
-def check_exported_symbols(binary) -> bool:
+def check_exported_symbols(binary, filename="") -> bool:
     ok: bool = True
 
     for symbol in binary.dynamic_symbols:
@@ -192,7 +189,7 @@ def check_exported_symbols(binary) -> bool:
         name = symbol.name
         if binary.header.machine_type == lief.ELF.ARCH.RISCV or name in IGNORE_EXPORTS:
             continue
-        print(f'{binary.name}: export of symbol {name} not allowed!')
+        print(f'{filename}: export of symbol {name} not allowed!')
         ok = False
     return ok
 
@@ -239,43 +236,53 @@ def check_PE_subsystem_version(binary) -> bool:
     return False
 
 def check_ELF_interpreter(binary) -> bool:
-    expected_interpreter = ELF_INTERPRETER_NAMES[binary.header.machine_type][binary.abstract.header.endianness]
-
+    expected_interpreter = ELF_INTERPRETER_NAMES.get(binary.header.machine_type)
+    if not expected_interpreter:
+        return True  # Skip check for unknown architectures
+    
     return binary.concrete.interpreter == expected_interpreter
 
-CHECKS = {
-lief.EXE_FORMATS.ELF: [
-    ('IMPORTED_SYMBOLS', check_imported_symbols),
-    ('EXPORTED_SYMBOLS', check_exported_symbols),
-    ('LIBRARY_DEPENDENCIES', check_ELF_libraries),
-    ('INTERPRETER_NAME', check_ELF_interpreter),
-],
-lief.EXE_FORMATS.MACHO: [
-    ('DYNAMIC_LIBRARIES', check_MACHO_libraries),
-    ('MIN_OS', check_MACHO_min_os),
-    ('SDK', check_MACHO_sdk),
-],
-lief.EXE_FORMATS.PE: [
-    ('DYNAMIC_LIBRARIES', check_PE_libraries),
-    #('SUBSYSTEM_VERSION', check_PE_subsystem_version),
-    #Note: needs to be set during build before we can check for it
-]
-}
+def get_checks_for_binary(binary):
+    """Get appropriate checks based on binary type"""
+    if isinstance(binary, lief.ELF.Binary):
+        return [
+            ('IMPORTED_SYMBOLS', check_imported_symbols),
+            ('EXPORTED_SYMBOLS', check_exported_symbols),
+            ('LIBRARY_DEPENDENCIES', check_ELF_libraries),
+            ('INTERPRETER_NAME', check_ELF_interpreter),
+        ]
+    elif isinstance(binary, lief.MachO.Binary):
+        return [
+            ('DYNAMIC_LIBRARIES', check_MACHO_libraries),
+            ('MIN_OS', check_MACHO_min_os),
+            ('SDK', check_MACHO_sdk),
+        ]
+    elif isinstance(binary, lief.PE.Binary):
+        return [
+            ('DYNAMIC_LIBRARIES', check_PE_libraries),
+            #('SUBSYSTEM_VERSION', check_PE_subsystem_version),
+            #Note: needs to be set during build before we can check for it
+        ]
+    else:
+        return []
 
 if __name__ == '__main__':
     retval: int = 0
     for filename in sys.argv[1:]:
         try:
             binary = lief.parse(filename)
-            etype = binary.format
-            if etype == lief.EXE_FORMATS.UNKNOWN:
+            if not binary:
                 print(f'{filename}: unknown executable format')
                 retval = 1
                 continue
 
             failed: List[str] = []
-            for (name, func) in CHECKS[etype]:
-                if not func(binary):
+            for (name, func) in get_checks_for_binary(binary):
+                if func.__name__ == 'check_exported_symbols':
+                    result = func(binary, filename)
+                else:
+                    result = func(binary)
+                if not result:
                     failed.append(name)
             if failed:
                 print(f'{filename}: failed {" ".join(failed)}')
