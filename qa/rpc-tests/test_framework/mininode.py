@@ -25,7 +25,11 @@
 
 import struct
 import socket
-import asyncore
+try:
+    import asyncore
+except ImportError:
+    # Python 3.12+ removed asyncore; use pyasyncore compatibility package
+    import pyasyncore as asyncore
 import time
 import sys
 import random

@@ -9,22 +9,35 @@ Test dependencies
 =================
 Before running the tests, the following must be installed.
 
-Unix
-----
-`python3-zmq` and `ltc_scrypt` are required. On Ubuntu or Debian they can be installed via:
+Unix (Debian/Ubuntu)
+--------------------
+`python3-zmq` and `ltc_scrypt` are required:
 ```
 sudo apt-get update
 sudo apt-get install -y curl gcc python3-pip python3-setuptools python3-zmq
 ./qa/pull-tester/install-deps.sh
 ```
 
-OS X
-------
+Unix (Arch Linux)
+-----------------
+```
+sudo pacman -S curl gcc python-pip python-setuptools python-pyzmq python-pyasyncore
+./qa/pull-tester/install-deps.sh
+```
+
+macOS
+-----
 ```
 brew install curl
 pip3 install pyzmq
 ./qa/pull-tester/install-deps.sh
 ```
+
+Python 3.12+ Note
+-----------------
+Python 3.12 removed the `asyncore` module. The `install-deps.sh` script will
+automatically install `pyasyncore` as a compatibility layer. On Arch Linux,
+you can also install it via `sudo pacman -S python-pyasyncore`.
 
 Running tests
 =============
