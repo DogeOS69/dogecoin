@@ -21,7 +21,12 @@ from test_framework.util import (
     connect_nodes_bi,
     hex_str_to_bytes,
     bytes_to_hex_str,
+    p2p_port,
+    rpc_port,
+    rpc_auth_pair,
 )
+import os
+import logging
 from test_framework.mininode import CTransaction, CTxIn, CTxOut, COutPoint, sha256
 from test_framework.script import CScript, OP_CHECKSIG, OP_DUP, OP_HASH160, OP_EQUALVERIFY
 
@@ -38,14 +43,32 @@ class ShadowForkTest(BitcoinTestFramework):
         super().__init__()
         self.setup_clean_chain = True
         self.num_nodes = 1
+        self.log = logging.getLogger("ShadowForkTest")
+
+    def initialize_shadowfork_datadir(self, dirname, n):
+        """Initialize datadir for shadowfork mode (not regtest)."""
+        datadir = os.path.join(dirname, "node"+str(n))
+        if not os.path.isdir(datadir):
+            os.makedirs(datadir)
+        rpc_u, rpc_p = rpc_auth_pair(n)
+        with open(os.path.join(datadir, "dogecoin.conf"), 'w', encoding='utf8') as f:
+            # Use shadowfork mode instead of regtest
+            f.write("shadowfork=0\n")  # Fork from genesis
+            f.write("shadowforkchain=main\n")
+            f.write("shadowforkmaturity=1\n")
+            f.write("rpcuser=" + rpc_u + "\n")
+            f.write("rpcpassword=" + rpc_p + "\n")
+            f.write("port="+str(p2p_port(n))+"\n")
+            f.write("rpcport="+str(rpc_port(n))+"\n")
+            f.write("listenonion=0\n")
+        return datadir
 
     def setup_network(self, split=False):
+        # Initialize datadir with shadowfork config (not regtest)
+        self.initialize_shadowfork_datadir(self.options.tmpdir, 0)
+
         # Start node in shadow fork mode
-        extra_args = [
-            "-shadowfork=0",  # Fork from genesis
-            "-shadowforkchain=main",
-            "-shadowforkmaturity=1",
-        ]
+        extra_args = []  # Config is in dogecoin.conf
         self.nodes = [start_node(0, self.options.tmpdir, extra_args)]
         self.is_network_split = False
 

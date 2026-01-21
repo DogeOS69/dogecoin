@@ -508,8 +508,9 @@ public:
             ? static_cast<const CChainParams*>(&testNetParams)
             : static_cast<const CChainParams*>(&mainParams);
 
-        // Copy genesis from source chain
-        genesis = pSourceParams->GenesisBlock();
+        // Use regtest-style genesis with trivial difficulty for fast mining
+        // (0x207fffff = minimal difficulty, same as regtest)
+        genesis = CreateGenesisBlock(1296688602, 2, 0x207fffff, 1, 88 * COIN);
 
         // Copy base consensus from source (will be modified below)
         consensus = pSourceParams->GetConsensus(0);
