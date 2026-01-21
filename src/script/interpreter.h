@@ -174,6 +174,54 @@ public:
     MutableTransactionSignatureChecker(const CMutableTransaction* txToIn, unsigned int nInIn, const CAmount& amount) : TransactionSignatureChecker(&txTo, nInIn, amount), txTo(*txToIn) {}
 };
 
+/**
+ * SentinelSignatureChecker wraps another checker and allows a magic "sentinel"
+ * signature to bypass signature verification. Used for shadow fork testing mode.
+ * The sentinel signature is a minimal DER-encoded signature with r=1, s=1:
+ * 30 06 02 01 01 02 01 01 [hash_type]
+ */
+class SentinelSignatureChecker : public BaseSignatureChecker
+{
+private:
+    const BaseSignatureChecker& wrapped;
+    bool fEnabled;
+
+    // Check if signature matches sentinel pattern (DER r=1, s=1)
+    // Sentinel format: 30 06 02 01 01 02 01 01 [hashtype]
+    bool IsSentinelSignature(const std::vector<unsigned char>& vchSig) const
+    {
+        // Minimum valid size: 8 bytes (DER) + 1 byte (hash type)
+        if (vchSig.size() < 9) {
+            return false;
+        }
+        return vchSig[0] == 0x30 && vchSig[1] == 0x06 &&
+               vchSig[2] == 0x02 && vchSig[3] == 0x01 && vchSig[4] == 0x01 &&
+               vchSig[5] == 0x02 && vchSig[6] == 0x01 && vchSig[7] == 0x01;
+    }
+
+public:
+    SentinelSignatureChecker(const BaseSignatureChecker& checkerIn, bool fEnabledIn = true)
+        : wrapped(checkerIn), fEnabled(fEnabledIn) {}
+
+    bool CheckSig(const std::vector<unsigned char>& scriptSig, const std::vector<unsigned char>& vchPubKey, const CScript& scriptCode, SigVersion sigversion) const override
+    {
+        if (fEnabled && IsSentinelSignature(scriptSig)) {
+            return true; // Sentinel signature bypasses verification
+        }
+        return wrapped.CheckSig(scriptSig, vchPubKey, scriptCode, sigversion);
+    }
+
+    bool CheckLockTime(const CScriptNum& nLockTime) const override
+    {
+        return wrapped.CheckLockTime(nLockTime);
+    }
+
+    bool CheckSequence(const CScriptNum& nSequence) const override
+    {
+        return wrapped.CheckSequence(nSequence);
+    }
+};
+
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* error = NULL);
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, unsigned int flags, const BaseSignatureChecker& checker, ScriptError* serror = NULL);
 

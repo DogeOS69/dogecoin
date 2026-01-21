@@ -472,6 +472,13 @@ std::string HelpMessage(HelpMessageMode mode)
 
     AppendParamsHelpMessages(strUsage, showDebug);
 
+    if (showDebug) {
+        strUsage += HelpMessageGroup(_("Shadow fork options (dev/testing):"));
+        strUsage += HelpMessageOpt("-shadowfork=<height>", _("Enable shadow fork mode, forking from the specified block height"));
+        strUsage += HelpMessageOpt("-shadowforkchain=<chain>", _("Source chain to fork from: main or test (default: main)"));
+        strUsage += HelpMessageOpt("-shadowforkmaturity=<n>", strprintf(_("Coinbase maturity for shadow fork (default: %d)"), 1));
+    }
+
     strUsage += HelpMessageGroup(_("Node relay options:"));
     if (showDebug) {
         strUsage += HelpMessageOpt("-acceptnonstdtxn", strprintf("Relay and mine \"non-standard\" transactions (%sdefault: %u)", "testnet/regtest only; ", !Params(CBaseChainParams::TESTNET).RequireStandard()));
@@ -894,6 +901,27 @@ bool AppInitParameterInteraction()
     // ********************************************************* Step 2: parameter interactions
 
     // also see: InitParameterInteraction()
+
+    // Shadow fork parameter validation
+    if (IsArgSet("-shadowfork")) {
+        int64_t nForkHeight = GetArg("-shadowfork", -1);
+        if (nForkHeight < 0) {
+            return InitError(_("Shadow fork height must be a non-negative integer."));
+        }
+
+        std::string sourceChain = GetArg("-shadowforkchain", "main");
+        if (sourceChain != "main" && sourceChain != "test") {
+            return InitError(_("Shadow fork source chain must be 'main' or 'test'."));
+        }
+
+        int64_t nMaturity = GetArg("-shadowforkmaturity", 1);
+        if (nMaturity < 0) {
+            return InitError(_("Shadow fork maturity must be a non-negative integer."));
+        }
+
+        LogPrintf("Shadow fork mode enabled: forking from %s at height %d, maturity=%d\n",
+                  sourceChain, nForkHeight, nMaturity);
+    }
 
     // if using block pruning, then disallow txindex
     if (GetArg("-prune", 0)) {

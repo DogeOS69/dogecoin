@@ -1,0 +1,2 @@
+# Clippy configuration for doge-shadow
+msrv = "1.75.0"

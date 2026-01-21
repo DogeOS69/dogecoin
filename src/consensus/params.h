@@ -81,6 +81,10 @@ struct Params {
     bool fStrictChainId;
     bool fAllowLegacyBlocks;
 
+    /** Shadow fork parameters (dev/testing only) */
+    bool fShadowForkMode = false;           // Master flag for shadow fork behaviors
+    bool fAllowSentinelSignatures = false;  // Allow magic signature bypass for CHECKSIG
+
     /** Height-aware consensus parameters */
     uint32_t nHeightEffective; // When these parameters come into use
     struct Params *pLeft = nullptr;      // Left hand branch

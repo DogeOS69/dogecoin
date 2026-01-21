@@ -13,6 +13,7 @@
 const std::string CBaseChainParams::MAIN = "main";
 const std::string CBaseChainParams::TESTNET = "test";
 const std::string CBaseChainParams::REGTEST = "regtest";
+const std::string CBaseChainParams::SHADOWFORK = "shadowfork";
 
 void AppendParamsHelpMessages(std::string& strUsage, bool debugHelp)
 {
@@ -65,6 +66,20 @@ public:
 };
 static CBaseRegTestParams regTestParams;
 
+/*
+ * Shadow fork (dev/testing mode forked from mainnet/testnet)
+ */
+class CBaseShadowForkParams : public CBaseChainParams
+{
+public:
+    CBaseShadowForkParams()
+    {
+        nRPCPort = 32555;
+        strDataDir = "shadowfork";
+    }
+};
+static CBaseShadowForkParams shadowForkParams;
+
 static CBaseChainParams* pCurrentBaseParams = 0;
 
 const CBaseChainParams& BaseParams()
@@ -81,6 +96,8 @@ CBaseChainParams& BaseParams(const std::string& chain)
         return testNetParams;
     else if (chain == CBaseChainParams::REGTEST)
         return regTestParams;
+    else if (chain == CBaseChainParams::SHADOWFORK)
+        return shadowForkParams;
     else
         throw std::runtime_error(strprintf("%s: Unknown chain %s.", __func__, chain));
 }
@@ -94,9 +111,15 @@ std::string ChainNameFromCommandLine()
 {
     bool fRegTest = GetBoolArg("-regtest", false);
     bool fTestNet = GetBoolArg("-testnet", false);
+    bool fShadowFork = IsArgSet("-shadowfork");
 
-    if (fTestNet && fRegTest)
-        throw std::runtime_error("Invalid combination of -regtest and -testnet.");
+    // Count how many chain types are specified
+    int nChainTypes = fRegTest + fTestNet + fShadowFork;
+    if (nChainTypes > 1)
+        throw std::runtime_error("Only one chain type can be specified: -regtest, -testnet, or -shadowfork.");
+
+    if (fShadowFork)
+        return CBaseChainParams::SHADOWFORK;
     if (fRegTest)
         return CBaseChainParams::REGTEST;
     if (fTestNet)

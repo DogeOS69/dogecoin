@@ -1394,13 +1394,17 @@ void UpdateCoins(const CTransaction& tx, CCoinsViewCache& inputs, int nHeight)
     UpdateCoins(tx, inputs, txundo, nHeight);
 }
 
-bool CScriptCheck::operator()() {
+bool CScriptCheck::operator()()
+{
     const CScript &scriptSig = ptxTo->vin[nIn].scriptSig;
     const CScriptWitness *witness = &ptxTo->vin[nIn].scriptWitness;
-    if (!VerifyScript(scriptSig, scriptPubKey, witness, nFlags, CachingTransactionSignatureChecker(ptxTo, nIn, amount, cacheStore, *txdata), &error)) {
-        return false;
+    CachingTransactionSignatureChecker baseChecker(ptxTo, nIn, amount, cacheStore, *txdata);
+
+    if (fAllowSentinel) {
+        SentinelSignatureChecker sentinelChecker(baseChecker, true);
+        return VerifyScript(scriptSig, scriptPubKey, witness, nFlags, sentinelChecker, &error);
     }
-    return true;
+    return VerifyScript(scriptSig, scriptPubKey, witness, nFlags, baseChecker, &error);
 }
 
 int GetSpendHeight(const CCoinsViewCache& inputs)
@@ -1468,6 +1472,9 @@ bool CheckInputs(const CTransaction& tx, CValidationState &state, const CCoinsVi
         if (pvChecks)
             pvChecks->reserve(tx.vin.size());
 
+        // Check if sentinel signatures are allowed (shadow fork mode)
+        const bool fAllowSentinel = Params().GetConsensus(0).fAllowSentinelSignatures;
+
         // The first loop above does all the inexpensive checks.
         // Only if ALL inputs pass do we perform expensive ECDSA signature checks.
         // Helps prevent CPU exhaustion attacks.
@@ -1484,7 +1491,7 @@ bool CheckInputs(const CTransaction& tx, CValidationState &state, const CCoinsVi
                 assert(coins);
 
                 // Verify signature
-                CScriptCheck check(*coins, tx, i, flags, cacheStore, &txdata);
+                CScriptCheck check(*coins, tx, i, flags, cacheStore, &txdata, fAllowSentinel);
                 if (pvChecks) {
                     pvChecks->push_back(CScriptCheck());
                     check.swap(pvChecks->back());
@@ -1497,7 +1504,7 @@ bool CheckInputs(const CTransaction& tx, CValidationState &state, const CCoinsVi
                         // avoid splitting the network between upgraded and
                         // non-upgraded nodes.
                         CScriptCheck check2(*coins, tx, i,
-                                flags & ~STANDARD_NOT_MANDATORY_VERIFY_FLAGS, cacheStore, &txdata);
+                                flags & ~STANDARD_NOT_MANDATORY_VERIFY_FLAGS, cacheStore, &txdata, fAllowSentinel);
                         if (check2())
                             return state.Invalid(false, REJECT_NONSTANDARD, strprintf("non-mandatory-script-verify-flag (%s)", ScriptErrorString(check.GetScriptError())));
                     }

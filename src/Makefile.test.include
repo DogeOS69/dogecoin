@@ -122,6 +122,7 @@ BITCOIN_TESTS =\
   test/script_P2SH_tests.cpp \
   test/script_tests.cpp \
   test/scriptnum_tests.cpp \
+  test/sentinel_signature_tests.cpp \
   test/scrypt_tests.cpp \
   test/serialize_tests.cpp \
   test/sighash_tests.cpp \

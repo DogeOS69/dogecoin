@@ -484,6 +484,105 @@ public:
 };
 static CRegTestParams regTestParams;
 
+/**
+ * Shadow Fork
+ * A special chain mode for local development and CI testing.
+ * Forks from mainnet or testnet at a specified height, then allows:
+ * - Trivial PoW mining (no real mining needed)
+ * - No AuxPoW requirement
+ * - Sentinel signature bypass for CHECKSIG
+ * - Fast coinbase maturity (default: 1 block)
+ * - No P2P networking (isolated)
+ */
+class CShadowForkParams : public CChainParams {
+public:
+    CShadowForkParams() {
+        strNetworkID = "shadowfork";
+
+        // Get source chain from command line (default: main)
+        std::string sourceChain = GetArg("-shadowforkchain", "main");
+
+        // Get the source chain params to copy from
+        // Note: Invalid chains fall through to mainParams; validation happens in AppInitParameterInteraction
+        const CChainParams* pSourceParams = (sourceChain == "test")
+            ? static_cast<const CChainParams*>(&testNetParams)
+            : static_cast<const CChainParams*>(&mainParams);
+
+        // Copy genesis from source chain
+        genesis = pSourceParams->GenesisBlock();
+
+        // Copy base consensus from source (will be modified below)
+        consensus = pSourceParams->GetConsensus(0);
+
+        // Shadow fork specific overrides
+        consensus.fShadowForkMode = true;
+        consensus.fAllowSentinelSignatures = true;
+
+        // Trivial PoW - max difficulty limit, no retargeting
+        consensus.powLimit = uint256S("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        consensus.fPowNoRetargeting = true;
+        consensus.fPowAllowMinDifficultyBlocks = true;
+
+        // Allow legacy (non-AuxPoW) blocks - bypasses AuxPoW requirement
+        consensus.fAllowLegacyBlocks = true;
+
+        // Reset chain work/assume valid to zero for fresh sync
+        consensus.nMinimumChainWork = uint256S("0x00");
+        consensus.defaultAssumeValid = uint256S("0x00");
+
+        // Fast coinbase maturity for dev convenience (note: GetArg works here
+        // because SelectParams is called after ParseParameters)
+        consensus.nCoinbaseMaturity = GetArg("-shadowforkmaturity", 1);
+
+        // Use the same genesis hash
+        consensus.hashGenesisBlock = genesis.GetHash();
+
+        // Set up consensus tree (single node - no height transitions needed)
+        consensus.nHeightEffective = 0;
+        consensus.pLeft = nullptr;
+        consensus.pRight = nullptr;
+        pConsensusRoot = &consensus;
+
+        // Network isolation - unique magic bytes to prevent P2P cross-talk
+        pchMessageStart[0] = 0xfd;
+        pchMessageStart[1] = 0xfd;
+        pchMessageStart[2] = 0xfd;
+        pchMessageStart[3] = 0xfd;
+        nDefaultPort = 32556;
+        nPruneAfterHeight = 1000;
+
+        // Copy address prefixes from source chain for compatibility
+        base58Prefixes[PUBKEY_ADDRESS] = pSourceParams->Base58Prefix(PUBKEY_ADDRESS);
+        base58Prefixes[SCRIPT_ADDRESS] = pSourceParams->Base58Prefix(SCRIPT_ADDRESS);
+        base58Prefixes[SECRET_KEY] = pSourceParams->Base58Prefix(SECRET_KEY);
+        base58Prefixes[EXT_PUBLIC_KEY] = pSourceParams->Base58Prefix(EXT_PUBLIC_KEY);
+        base58Prefixes[EXT_SECRET_KEY] = pSourceParams->Base58Prefix(EXT_SECRET_KEY);
+
+        // No P2P seeds - this is an isolated environment
+        vSeeds.clear();
+        vFixedSeeds.clear();
+
+        // Dev-friendly flags (like regtest)
+        fMiningRequiresPeers = false;
+        fDefaultConsistencyChecks = true;
+        fRequireStandard = false;
+        fMineBlocksOnDemand = true;
+
+        // Minimal checkpoints - just genesis
+        checkpointData = (CCheckpointData){
+            boost::assign::map_list_of
+            (0, consensus.hashGenesisBlock)
+        };
+
+        chainTxData = ChainTxData{
+            0,
+            0,
+            0
+        };
+    }
+};
+static CShadowForkParams shadowForkParams;
+
 static CChainParams *pCurrentParams = 0;
 
 const CChainParams &Params() {
@@ -513,6 +612,8 @@ CChainParams& Params(const std::string& chain)
             return testNetParams;
     else if (chain == CBaseChainParams::REGTEST)
             return regTestParams;
+    else if (chain == CBaseChainParams::SHADOWFORK)
+            return shadowForkParams;
     else
         throw std::runtime_error(strprintf("%s: Unknown chain %s.", __func__, chain));
 }
