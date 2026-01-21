@@ -221,6 +221,10 @@ enum Commands {
         #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
         rpcport: u16,
 
+        /// Shadow node datadir (for cookie auth with temp datadirs)
+        #[arg(long, env = "DOGE_SHADOW_DATADIR")]
+        datadir: Option<PathBuf>,
+
         /// Path to dogecoin-cli binary
         #[arg(long, default_value = "dogecoin-cli", env = "DOGE_SHADOW_CLI")]
         cli: PathBuf,
@@ -240,6 +244,10 @@ enum Commands {
         #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
         rpcport: u16,
 
+        /// Shadow node datadir (for cookie auth with temp datadirs)
+        #[arg(long, env = "DOGE_SHADOW_DATADIR")]
+        datadir: Option<PathBuf>,
+
         /// Path to dogecoin-cli binary
         #[arg(long, default_value = "dogecoin-cli", env = "DOGE_SHADOW_CLI")]
         cli: PathBuf,
@@ -254,6 +262,10 @@ enum Commands {
         /// RPC port (default: 32555)
         #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
         rpcport: u16,
+
+        /// Shadow node datadir (for cookie auth with temp datadirs)
+        #[arg(long, env = "DOGE_SHADOW_DATADIR")]
+        datadir: Option<PathBuf>,
 
         /// Path to dogecoin-cli binary
         #[arg(long, default_value = "dogecoin-cli", env = "DOGE_SHADOW_CLI")]
@@ -272,6 +284,10 @@ enum Commands {
         /// RPC port (default: 32555)
         #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
         rpcport: u16,
+
+        /// Shadow node datadir (for cookie auth with temp datadirs)
+        #[arg(long, env = "DOGE_SHADOW_DATADIR")]
+        datadir: Option<PathBuf>,
 
         /// Path to dogecoin-cli binary
         #[arg(long, default_value = "dogecoin-cli", env = "DOGE_SHADOW_CLI")]
@@ -487,9 +503,14 @@ fn main() {
             }
         }
 
-        Commands::MineBlock { address, rpcport, cli } => {
+        Commands::MineBlock { address, rpcport, datadir, cli } => {
             eprintln!("Mining block to address: {}", address);
-            match rpc_call(&cli, rpcport, &["generatetoaddress", "1", &address]) {
+            match rpc_call_with_datadir(
+                &cli,
+                rpcport,
+                datadir.as_deref(),
+                &["generatetoaddress", "1", &address],
+            ) {
                 Ok(result) => {
                     println!("{}", result);
                     eprintln!("Block mined successfully!");
@@ -501,7 +522,7 @@ fn main() {
             }
         }
 
-        Commands::MineInterval { interval, address, rpcport, cli, count } => {
+        Commands::MineInterval { interval, address, rpcport, datadir, cli, count } => {
             eprintln!("Starting interval mining...");
             eprintln!("  Interval: {}s", interval);
             eprintln!("  Address: {}", address);
@@ -513,7 +534,12 @@ fn main() {
 
             let mut mined = 0u64;
             loop {
-                match rpc_call(&cli, rpcport, &["generatetoaddress", "1", &address]) {
+                match rpc_call_with_datadir(
+                    &cli,
+                    rpcport,
+                    datadir.as_deref(),
+                    &["generatetoaddress", "1", &address],
+                ) {
                     Ok(result) => {
                         mined += 1;
                         let block_hash = result.lines().next().unwrap_or("<unknown>");
@@ -533,9 +559,9 @@ fn main() {
             }
         }
 
-        Commands::Stop { rpcport, cli } => {
+        Commands::Stop { rpcport, datadir, cli } => {
             eprintln!("Stopping shadow fork on port {}...", rpcport);
-            match rpc_call(&cli, rpcport, &["stop"]) {
+            match rpc_call_with_datadir(&cli, rpcport, datadir.as_deref(), &["stop"]) {
                 Ok(_) => {
                     eprintln!("Shadow fork stopped.");
                 }
@@ -554,15 +580,17 @@ fn main() {
             eprintln!("Use it to spend any UTXO without knowing the private key.");
         }
 
-        Commands::Info { rpcport, cli } => match rpc_call(&cli, rpcport, &["getblockchaininfo"]) {
-            Ok(result) => {
-                println!("{}", result);
+        Commands::Info { rpcport, datadir, cli } => {
+            match rpc_call_with_datadir(&cli, rpcport, datadir.as_deref(), &["getblockchaininfo"]) {
+                Ok(result) => {
+                    println!("{}", result);
+                }
+                Err(e) => {
+                    eprintln!("Error getting info: {}", e);
+                    std::process::exit(1);
+                }
             }
-            Err(e) => {
-                eprintln!("Error getting info: {}", e);
-                std::process::exit(1);
-            }
-        },
+        }
 
         Commands::Step {
             source_rpcport,
