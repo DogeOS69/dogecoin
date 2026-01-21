@@ -47,7 +47,6 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/bind/bind.hpp>
-#include <boost/math/distributions/poisson.hpp>
 #include <boost/thread.hpp>
 
 #if defined(NDEBUG)
