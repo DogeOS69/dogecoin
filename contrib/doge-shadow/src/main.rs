@@ -2,8 +2,17 @@
 //!
 //! This CLI tool manages shadow fork instances for local development and testing.
 //! It wraps dogecoind with the appropriate flags and provides convenience commands.
+//!
+//! Configuration can be provided via:
+//! 1. TOML config file (~/.config/doge-shadow/config.toml or ./doge-shadow.toml)
+//! 2. Environment variables (DOGE_SHADOW_*)
+//! 3. Command-line arguments
+//!
+//! Precedence: CLI > env vars > config file
 
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -13,6 +22,153 @@ use tempfile::TempDir;
 /// Sentinel signature bytes (DER-encoded r=1, s=1)
 /// Format: 30 06 02 01 01 02 01 01 [hashtype]
 pub const SENTINEL_SIG: [u8; 8] = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01];
+
+/// Config file structure (TOML)
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Config {
+    /// Default RPC port for shadow node
+    rpcport: Option<u16>,
+    /// Default source RPC port
+    source_rpcport: Option<u16>,
+    /// Path to dogecoin-cli binary
+    cli: Option<PathBuf>,
+    /// Path to dogecoind binary
+    dogecoind: Option<PathBuf>,
+    /// Default source chain (main/test)
+    chain: Option<String>,
+    /// Default coinbase maturity
+    maturity: Option<u32>,
+    /// Default mining address
+    address: Option<String>,
+    /// Default mining interval
+    interval: Option<u64>,
+    /// Shadow node datadir
+    datadir: Option<PathBuf>,
+    /// Source node datadir
+    source_datadir: Option<PathBuf>,
+}
+
+impl Config {
+    /// Load config from file, checking multiple locations
+    fn load() -> Self {
+        // Check locations in order of precedence (later overrides earlier)
+        let locations = [
+            // System-wide config
+            PathBuf::from("/etc/doge-shadow/config.toml"),
+            // User config directory
+            dirs::config_dir().map(|p| p.join("doge-shadow/config.toml")).unwrap_or_default(),
+            // Home directory
+            dirs::home_dir().map(|p| p.join(".doge-shadow.toml")).unwrap_or_default(),
+            // Current directory
+            PathBuf::from("doge-shadow.toml"),
+        ];
+
+        let mut config = Config::default();
+
+        for path in locations.iter().filter(|p| !p.as_os_str().is_empty()) {
+            if path.exists() {
+                if let Ok(contents) = fs::read_to_string(path) {
+                    if let Ok(file_config) = toml::from_str::<Config>(&contents) {
+                        // Merge: file values override defaults
+                        config.merge(file_config);
+                        eprintln!("Loaded config from {:?}", path);
+                    }
+                }
+            }
+        }
+
+        config
+    }
+
+    /// Merge another config into this one (other takes precedence)
+    fn merge(&mut self, other: Config) {
+        if other.rpcport.is_some() {
+            self.rpcport = other.rpcport;
+        }
+        if other.source_rpcport.is_some() {
+            self.source_rpcport = other.source_rpcport;
+        }
+        if other.cli.is_some() {
+            self.cli = other.cli;
+        }
+        if other.dogecoind.is_some() {
+            self.dogecoind = other.dogecoind;
+        }
+        if other.chain.is_some() {
+            self.chain = other.chain;
+        }
+        if other.maturity.is_some() {
+            self.maturity = other.maturity;
+        }
+        if other.address.is_some() {
+            self.address = other.address;
+        }
+        if other.interval.is_some() {
+            self.interval = other.interval;
+        }
+        if other.datadir.is_some() {
+            self.datadir = other.datadir;
+        }
+        if other.source_datadir.is_some() {
+            self.source_datadir = other.source_datadir;
+        }
+    }
+
+    /// Set environment variables from config (for clap to pick up)
+    fn set_env_vars(&self) {
+        if let Some(v) = &self.rpcport {
+            if std::env::var("DOGE_SHADOW_RPCPORT").is_err() {
+                std::env::set_var("DOGE_SHADOW_RPCPORT", v.to_string());
+            }
+        }
+        if let Some(v) = &self.source_rpcport {
+            if std::env::var("DOGE_SHADOW_SOURCE_RPCPORT").is_err() {
+                std::env::set_var("DOGE_SHADOW_SOURCE_RPCPORT", v.to_string());
+            }
+        }
+        if let Some(v) = &self.cli {
+            if std::env::var("DOGE_SHADOW_CLI").is_err() {
+                std::env::set_var("DOGE_SHADOW_CLI", v.as_os_str());
+            }
+        }
+        if let Some(v) = &self.dogecoind {
+            if std::env::var("DOGE_SHADOW_DOGECOIND").is_err() {
+                std::env::set_var("DOGE_SHADOW_DOGECOIND", v.as_os_str());
+            }
+        }
+        if let Some(v) = &self.chain {
+            if std::env::var("DOGE_SHADOW_CHAIN").is_err() {
+                std::env::set_var("DOGE_SHADOW_CHAIN", v);
+            }
+        }
+        if let Some(v) = &self.maturity {
+            if std::env::var("DOGE_SHADOW_MATURITY").is_err() {
+                std::env::set_var("DOGE_SHADOW_MATURITY", v.to_string());
+            }
+        }
+        if let Some(v) = &self.address {
+            if std::env::var("DOGE_SHADOW_ADDRESS").is_err() {
+                std::env::set_var("DOGE_SHADOW_ADDRESS", v);
+            }
+        }
+        if let Some(v) = &self.interval {
+            if std::env::var("DOGE_SHADOW_INTERVAL").is_err() {
+                std::env::set_var("DOGE_SHADOW_INTERVAL", v.to_string());
+            }
+        }
+        if let Some(v) = &self.datadir {
+            if std::env::var("DOGE_SHADOW_DATADIR").is_err() {
+                std::env::set_var("DOGE_SHADOW_DATADIR", v.as_os_str());
+            }
+        }
+        if let Some(v) = &self.source_datadir {
+            if std::env::var("DOGE_SHADOW_SOURCE_DATADIR").is_err() {
+                std::env::set_var("DOGE_SHADOW_SOURCE_DATADIR", v.as_os_str());
+            }
+        }
+    }
+}
 
 /// Shadow fork orchestration CLI for Dogecoin Core
 #[derive(Parser)]
@@ -27,65 +183,65 @@ enum Commands {
     /// Start a new shadow fork instance
     Start {
         /// Fork height (block to fork from)
-        #[arg(short = 'H', long)]
+        #[arg(short = 'H', long, env = "DOGE_SHADOW_HEIGHT")]
         height: u64,
 
         /// Source chain: main or test
-        #[arg(short, long, default_value = "main")]
+        #[arg(short, long, default_value = "main", env = "DOGE_SHADOW_CHAIN")]
         chain: String,
 
         /// Coinbase maturity (default: 1)
-        #[arg(short, long, default_value = "1")]
+        #[arg(short, long, default_value = "1", env = "DOGE_SHADOW_MATURITY")]
         maturity: u32,
 
         /// Path to dogecoind binary
-        #[arg(long, default_value = "dogecoind")]
+        #[arg(long, default_value = "dogecoind", env = "DOGE_SHADOW_DOGECOIND")]
         dogecoind: PathBuf,
 
         /// Path to source datadir to copy blocks from
-        #[arg(long)]
+        #[arg(long, env = "DOGE_SHADOW_SOURCE_DATADIR")]
         source_datadir: Option<PathBuf>,
 
         /// RPC port (default: 32555)
-        #[arg(long, default_value = "32555")]
+        #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
         rpcport: u16,
 
         /// Run in foreground (don't daemonize)
-        #[arg(long)]
+        #[arg(long, env = "DOGE_SHADOW_FOREGROUND")]
         foreground: bool,
     },
 
     /// Mine a single block
     MineBlock {
         /// Address to receive coinbase reward
-        #[arg(short, long)]
+        #[arg(short, long, env = "DOGE_SHADOW_ADDRESS")]
         address: String,
 
         /// RPC port (default: 32555)
-        #[arg(long, default_value = "32555")]
+        #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
         rpcport: u16,
 
         /// Path to dogecoin-cli binary
-        #[arg(long, default_value = "dogecoin-cli")]
+        #[arg(long, default_value = "dogecoin-cli", env = "DOGE_SHADOW_CLI")]
         cli: PathBuf,
     },
 
     /// Start interval mining
     MineInterval {
         /// Mining interval in seconds
-        #[arg(short, long, default_value = "10")]
+        #[arg(short, long, default_value = "10", env = "DOGE_SHADOW_INTERVAL")]
         interval: u64,
 
         /// Address to receive coinbase reward
-        #[arg(short, long)]
+        #[arg(short, long, env = "DOGE_SHADOW_ADDRESS")]
         address: String,
 
         /// RPC port (default: 32555)
-        #[arg(long, default_value = "32555")]
+        #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
         rpcport: u16,
 
         /// Path to dogecoin-cli binary
-        #[arg(long, default_value = "dogecoin-cli")]
+        #[arg(long, default_value = "dogecoin-cli", env = "DOGE_SHADOW_CLI")]
         cli: PathBuf,
 
         /// Number of blocks to mine (0 = unlimited)
@@ -96,11 +252,11 @@ enum Commands {
     /// Stop the shadow fork instance
     Stop {
         /// RPC port (default: 32555)
-        #[arg(long, default_value = "32555")]
+        #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
         rpcport: u16,
 
         /// Path to dogecoin-cli binary
-        #[arg(long, default_value = "dogecoin-cli")]
+        #[arg(long, default_value = "dogecoin-cli", env = "DOGE_SHADOW_CLI")]
         cli: PathBuf,
     },
 
@@ -114,22 +270,70 @@ enum Commands {
     /// Get blockchain info from running instance
     Info {
         /// RPC port (default: 32555)
-        #[arg(long, default_value = "32555")]
+        #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
         rpcport: u16,
 
         /// Path to dogecoin-cli binary
-        #[arg(long, default_value = "dogecoin-cli")]
+        #[arg(long, default_value = "dogecoin-cli", env = "DOGE_SHADOW_CLI")]
         cli: PathBuf,
+    },
+
+    /// Step through canonical blocks from source chain
+    ///
+    /// Fetches blocks from a running mainnet/testnet node and submits them
+    /// to the shadow fork. Once the shadow chain diverges (a local block is
+    /// mined), stepping is disabled.
+    Step {
+        /// Source node RPC port to fetch blocks from
+        #[arg(long, env = "DOGE_SHADOW_SOURCE_RPCPORT")]
+        source_rpcport: u16,
+
+        /// Source node datadir (for cookie auth if not using default)
+        #[arg(long, env = "DOGE_SHADOW_SOURCE_DATADIR")]
+        source_datadir: Option<PathBuf>,
+
+        /// Shadow node RPC port (default: 32555)
+        #[arg(long, default_value = "32555", env = "DOGE_SHADOW_RPCPORT")]
+        rpcport: u16,
+
+        /// Shadow node datadir (required for cookie auth with temp datadirs)
+        #[arg(long, env = "DOGE_SHADOW_DATADIR")]
+        datadir: Option<PathBuf>,
+
+        /// Path to dogecoin-cli binary
+        #[arg(long, default_value = "dogecoin-cli", env = "DOGE_SHADOW_CLI")]
+        cli: PathBuf,
+
+        /// Number of blocks to step (default: 1)
+        #[arg(short, long, default_value = "1")]
+        count: u64,
+
+        /// Step until reaching this height (overrides --count)
+        #[arg(long)]
+        to_height: Option<u64>,
     },
 }
 
 /// Execute a dogecoin-cli command and return the output
 fn rpc_call(cli: &Path, rpcport: u16, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(cli)
-        .arg(format!("-rpcport={}", rpcport))
-        .args(args)
-        .output()
-        .map_err(|e| format!("Failed to execute dogecoin-cli: {}", e))?;
+    rpc_call_with_datadir(cli, rpcport, None, args)
+}
+
+/// Execute a dogecoin-cli command with optional datadir for cookie auth
+fn rpc_call_with_datadir(
+    cli: &Path,
+    rpcport: u16,
+    datadir: Option<&Path>,
+    args: &[&str],
+) -> Result<String, String> {
+    let mut cmd = Command::new(cli);
+    cmd.arg(format!("-rpcport={}", rpcport));
+    if let Some(dir) = datadir {
+        cmd.arg(format!("-datadir={}", dir.display()));
+    }
+    cmd.args(args);
+
+    let output = cmd.output().map_err(|e| format!("Failed to execute dogecoin-cli: {}", e))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -148,6 +352,16 @@ fn wait_for_rpc(cli: &Path, rpcport: u16, timeout_secs: u64) -> bool {
         thread::sleep(Duration::from_secs(1));
     }
     false
+}
+
+/// Get current block height from node with optional datadir
+fn get_block_height_with_datadir(
+    cli: &Path,
+    rpcport: u16,
+    datadir: Option<&Path>,
+) -> Result<u64, String> {
+    let result = rpc_call_with_datadir(cli, rpcport, datadir, &["getblockcount"])?;
+    result.trim().parse::<u64>().map_err(|e| format!("Failed to parse block height: {}", e))
 }
 
 /// Spawn dogecoind and optionally wait for it
@@ -189,6 +403,11 @@ fn spawn_dogecoind(
 }
 
 fn main() {
+    // Load config file and set env vars before CLI parsing
+    // This allows: CLI > env vars > config file precedence
+    let config = Config::load();
+    config.set_env_vars();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -344,5 +563,157 @@ fn main() {
                 std::process::exit(1);
             }
         },
+
+        Commands::Step {
+            source_rpcport,
+            source_datadir,
+            rpcport,
+            datadir,
+            cli,
+            count,
+            to_height,
+        } => {
+            eprintln!("Canonical block stepping...");
+            eprintln!("  Source RPC port: {}", source_rpcport);
+            if let Some(ref dir) = source_datadir {
+                eprintln!("  Source datadir: {:?}", dir);
+            }
+            eprintln!("  Shadow RPC port: {}", rpcport);
+            if let Some(ref dir) = datadir {
+                eprintln!("  Shadow datadir: {:?}", dir);
+            }
+
+            // Convert Option<PathBuf> to Option<&Path> for RPC calls
+            let source_dir = source_datadir.as_deref();
+            let shadow_dir = datadir.as_deref();
+
+            // Get current shadow chain state
+            let shadow_height = match get_block_height_with_datadir(&cli, rpcport, shadow_dir) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("Error getting shadow chain height: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            eprintln!("  Shadow chain height: {}", shadow_height);
+
+            // Get shadow chain tip hash
+            let shadow_tip_hash = match rpc_call_with_datadir(
+                &cli,
+                rpcport,
+                shadow_dir,
+                &["getblockhash", &shadow_height.to_string()],
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("Error getting shadow tip hash: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Get source chain hash at same height to check for divergence
+            let source_hash_at_height = match rpc_call_with_datadir(
+                &cli,
+                source_rpcport,
+                source_dir,
+                &["getblockhash", &shadow_height.to_string()],
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("Error getting source block hash at height {}: {}", shadow_height, e);
+                    eprintln!("Make sure source node is synced past height {}", shadow_height);
+                    std::process::exit(1);
+                }
+            };
+
+            // Check for divergence
+            if shadow_tip_hash != source_hash_at_height {
+                eprintln!("\nError: Chain has diverged from canonical chain.");
+                eprintln!("  Shadow tip hash: {}", shadow_tip_hash);
+                eprintln!("  Source hash:     {}", source_hash_at_height);
+                eprintln!("\nCanonical block stepping is disabled once a local block is mined.");
+                std::process::exit(1);
+            }
+
+            // Calculate target height
+            let target_height = match to_height {
+                Some(h) => h,
+                None => shadow_height + count,
+            };
+
+            if target_height <= shadow_height {
+                eprintln!("Already at or past target height {}", target_height);
+                return;
+            }
+
+            eprintln!(
+                "  Stepping from {} to {} ({} blocks)",
+                shadow_height,
+                target_height,
+                target_height - shadow_height
+            );
+            eprintln!();
+
+            // Step through each block
+            let mut stepped = 0u64;
+            for height in (shadow_height + 1)..=target_height {
+                // Get block hash from source
+                let block_hash = match rpc_call_with_datadir(
+                    &cli,
+                    source_rpcport,
+                    source_dir,
+                    &["getblockhash", &height.to_string()],
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        eprintln!("Error getting block hash at height {}: {}", height, e);
+                        eprintln!("Source chain may not be synced to height {}", height);
+                        break;
+                    }
+                };
+
+                // Get raw block from source (verbosity=0 for hex)
+                let block_hex = match rpc_call_with_datadir(
+                    &cli,
+                    source_rpcport,
+                    source_dir,
+                    &["getblock", &block_hash, "0"],
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        eprintln!("Error getting block data at height {}: {}", height, e);
+                        break;
+                    }
+                };
+
+                // Submit block to shadow chain
+                match rpc_call_with_datadir(&cli, rpcport, shadow_dir, &["submitblock", &block_hex])
+                {
+                    Ok(result) => {
+                        // submitblock returns null on success, or an error string
+                        if result.is_empty() || result == "null" {
+                            stepped += 1;
+                            eprintln!("  Block {} submitted: {}", height, &block_hash[..16]);
+                        } else {
+                            eprintln!("Error submitting block {}: {}", height, result);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error submitting block {}: {}", height, e);
+                        break;
+                    }
+                }
+            }
+
+            eprintln!();
+            if stepped > 0 {
+                eprintln!("Stepped {} canonical blocks.", stepped);
+                let new_height = shadow_height + stepped;
+                eprintln!("Shadow chain now at height {}.", new_height);
+            } else {
+                eprintln!("No blocks stepped.");
+            }
+        }
     }
 }
