@@ -1,0 +1,26 @@
+{
+  "comment": "Shadow fork test snapshot - placeholder for pinned block hashes and known UTXOs",
+  "pinned_height": 100,
+  "chain": "test",
+  "blocks": {
+    "100": "placeholder-hash-block-100",
+    "101": "placeholder-hash-block-101",
+    "102": "placeholder-hash-block-102",
+    "103": "placeholder-hash-block-103",
+    "104": "placeholder-hash-block-104",
+    "105": "placeholder-hash-block-105",
+    "106": "placeholder-hash-block-106",
+    "107": "placeholder-hash-block-107",
+    "108": "placeholder-hash-block-108",
+    "109": "placeholder-hash-block-109",
+    "110": "placeholder-hash-block-110"
+  },
+  "known_spendable_utxo": {
+    "comment": "UTXO known to be spent in block 101 (for canonical conflict test)",
+    "txid": "placeholder-txid",
+    "vout": 0,
+    "amount": 100.0,
+    "scriptPubKey": "76a914placeholder88ac",
+    "spent_in_block": 101
+  }
+}

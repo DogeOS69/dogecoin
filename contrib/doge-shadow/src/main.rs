@@ -304,6 +304,18 @@ enum Commands {
         #[arg(long, env = "DOGE_SHADOW_SOURCE_RPCPORT")]
         source_rpcport: u16,
 
+        /// Source node RPC host (default: 127.0.0.1)
+        #[arg(long, default_value = "127.0.0.1", env = "DOGE_SHADOW_SOURCE_RPCCONNECT")]
+        source_rpcconnect: String,
+
+        /// Source node RPC username (for remote auth)
+        #[arg(long, env = "DOGE_SHADOW_SOURCE_RPCUSER")]
+        source_rpcuser: Option<String>,
+
+        /// Source node RPC password (for remote auth)
+        #[arg(long, env = "DOGE_SHADOW_SOURCE_RPCPASSWORD")]
+        source_rpcpassword: Option<String>,
+
         /// Source node datadir (for cookie auth if not using default)
         #[arg(long, env = "DOGE_SHADOW_SOURCE_DATADIR")]
         source_datadir: Option<PathBuf>,
@@ -347,6 +359,40 @@ fn rpc_call_with_datadir(
     if let Some(dir) = datadir {
         cmd.arg(format!("-datadir={}", dir.display()));
     }
+    cmd.args(args);
+
+    let output = cmd.output().map_err(|e| format!("Failed to execute dogecoin-cli: {}", e))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// RPC connection options for source node
+struct SourceRpcOptions<'a> {
+    host: &'a str,
+    port: u16,
+    user: Option<&'a str>,
+    password: Option<&'a str>,
+    datadir: Option<&'a Path>,
+}
+
+/// Execute a dogecoin-cli command to a source node with full connection options
+fn rpc_call_source(cli: &Path, opts: &SourceRpcOptions, args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new(cli);
+    cmd.arg(format!("-rpcconnect={}", opts.host));
+    cmd.arg(format!("-rpcport={}", opts.port));
+
+    // Use user/password auth if provided, otherwise fall back to cookie auth
+    if let (Some(user), Some(pass)) = (opts.user, opts.password) {
+        cmd.arg(format!("-rpcuser={}", user));
+        cmd.arg(format!("-rpcpassword={}", pass));
+    } else if let Some(dir) = opts.datadir {
+        cmd.arg(format!("-datadir={}", dir.display()));
+    }
+
     cmd.args(args);
 
     let output = cmd.output().map_err(|e| format!("Failed to execute dogecoin-cli: {}", e))?;
@@ -594,6 +640,9 @@ fn main() {
 
         Commands::Step {
             source_rpcport,
+            source_rpcconnect,
+            source_rpcuser,
+            source_rpcpassword,
             source_datadir,
             rpcport,
             datadir,
@@ -602,17 +651,25 @@ fn main() {
             to_height,
         } => {
             eprintln!("Canonical block stepping...");
-            eprintln!("  Source RPC port: {}", source_rpcport);
-            if let Some(ref dir) = source_datadir {
-                eprintln!("  Source datadir: {:?}", dir);
+            eprintln!("  Source RPC: {}:{}", source_rpcconnect, source_rpcport);
+            if source_rpcuser.is_some() {
+                eprintln!("  Source auth: user/password");
+            } else if let Some(ref dir) = source_datadir {
+                eprintln!("  Source auth: cookie (datadir: {:?})", dir);
             }
             eprintln!("  Shadow RPC port: {}", rpcport);
             if let Some(ref dir) = datadir {
                 eprintln!("  Shadow datadir: {:?}", dir);
             }
 
-            // Convert Option<PathBuf> to Option<&Path> for RPC calls
-            let source_dir = source_datadir.as_deref();
+            // Build source RPC options
+            let source_opts = SourceRpcOptions {
+                host: &source_rpcconnect,
+                port: source_rpcport,
+                user: source_rpcuser.as_deref(),
+                password: source_rpcpassword.as_deref(),
+                datadir: source_datadir.as_deref(),
+            };
             let shadow_dir = datadir.as_deref();
 
             // Get current shadow chain state
@@ -640,10 +697,9 @@ fn main() {
             };
 
             // Get source chain hash at same height to check for divergence
-            let source_hash_at_height = match rpc_call_with_datadir(
+            let source_hash_at_height = match rpc_call_source(
                 &cli,
-                source_rpcport,
-                source_dir,
+                &source_opts,
                 &["getblockhash", &shadow_height.to_string()],
             ) {
                 Ok(h) => h,
@@ -686,10 +742,9 @@ fn main() {
             let mut stepped = 0u64;
             for height in (shadow_height + 1)..=target_height {
                 // Get block hash from source
-                let block_hash = match rpc_call_with_datadir(
+                let block_hash = match rpc_call_source(
                     &cli,
-                    source_rpcport,
-                    source_dir,
+                    &source_opts,
                     &["getblockhash", &height.to_string()],
                 ) {
                     Ok(h) => h,
@@ -701,18 +756,14 @@ fn main() {
                 };
 
                 // Get raw block from source (verbosity=0 for hex)
-                let block_hex = match rpc_call_with_datadir(
-                    &cli,
-                    source_rpcport,
-                    source_dir,
-                    &["getblock", &block_hash, "0"],
-                ) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        eprintln!("Error getting block data at height {}: {}", height, e);
-                        break;
-                    }
-                };
+                let block_hex =
+                    match rpc_call_source(&cli, &source_opts, &["getblock", &block_hash, "0"]) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            eprintln!("Error getting block data at height {}: {}", height, e);
+                            break;
+                        }
+                    };
 
                 // Submit block to shadow chain
                 match rpc_call_with_datadir(&cli, rpcport, shadow_dir, &["submitblock", &block_hex])

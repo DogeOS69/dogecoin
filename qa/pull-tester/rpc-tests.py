@@ -211,6 +211,8 @@ testScriptsExt = [
     'forknotify.py',
     'invalidateblock.py',
     'maxblocksinflight.py',
+    # Shadow fork integration tests (opt-in, requires TESTNET_RPC_URL for Tests 1, 8)
+    'shadowfork_integration.py',
 ]
 
 
