@@ -1998,12 +1998,15 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     int64_t nTime3 = GetTimeMicros(); nTimeConnect += nTime3 - nTime2;
     LogPrint("bench", "      - Connect %u transactions: %.2fms (%.3fms/tx, %.3fms/txin) [%.2fs]\n", (unsigned)block.vtx.size(), 0.001 * (nTime3 - nTime2), 0.001 * (nTime3 - nTime2) / block.vtx.size(), nInputs <= 1 ? 0 : 0.001 * (nTime3 - nTime2) / (nInputs-1), nTimeConnect * 0.000001);
 
-    CAmount blockReward = nFees + GetDogecoinBlockSubsidy(pindex->nHeight, chainparams.GetConsensus(pindex->nHeight), hashPrevBlock);
-    if (block.vtx[0]->GetValueOut() > blockReward)
-        return state.DoS(100,
-                         error("ConnectBlock(): coinbase pays too much (actual=%d vs limit=%d)",
-                               block.vtx[0]->GetValueOut(), blockReward),
-                               REJECT_INVALID, "bad-cb-amount");
+    const Consensus::Params& consensusAtHeight = chainparams.GetConsensus(pindex->nHeight);
+    if (!consensusAtHeight.fShadowForkMode) {
+        CAmount blockReward = nFees + GetDogecoinBlockSubsidy(pindex->nHeight, consensusAtHeight, hashPrevBlock);
+        if (block.vtx[0]->GetValueOut() > blockReward)
+            return state.DoS(100,
+                             error("ConnectBlock(): coinbase pays too much (actual=%d vs limit=%d)",
+                                   block.vtx[0]->GetValueOut(), blockReward),
+                                   REJECT_INVALID, "bad-cb-amount");
+    }
 
     if (!control.Wait())
         return state.DoS(100, false);
@@ -3074,25 +3077,31 @@ bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationState& sta
     const CChainParams& params = Params();
     const Consensus::Params& consensusParams = params.GetConsensus(nHeight);
 
-    // Disallow legacy blocks after merge-mining start.
-    if (!consensusParams.fAllowLegacyBlocks
-        && block.IsLegacy())
-        return state.DoS(100, error("%s : legacy block after auxpow start",
-                                    __func__),
-                         REJECT_INVALID, "late-legacy-block");
+    // Shadow fork mode: skip block type and nBits checks. Both legacy (mined)
+    // and AuxPoW (imported) blocks are accepted. nBits cannot be validated because
+    // the flattened consensus params produce incorrect difficulty for canonical
+    // blocks at post-activation heights. CheckBlockHeader still verifies the
+    // block hash meets the claimed nBits target.
+    if (!consensusParams.fShadowForkMode) {
+        // Disallow legacy blocks after merge-mining start.
+        if (!consensusParams.fAllowLegacyBlocks
+            && block.IsLegacy())
+            return state.DoS(100, error("%s : legacy block after auxpow start",
+                                        __func__),
+                             REJECT_INVALID, "late-legacy-block");
 
-    // Dogecoin: Disallow AuxPow blocks before it is activated.
-    // TODO: Remove this test, as checkpoints will enforce this for us now
-    // NOTE: Previously this had its own fAllowAuxPoW flag, but that's always the opposite of fAllowLegacyBlocks
-    if (consensusParams.fAllowLegacyBlocks
-        && block.IsAuxpow())
-        return state.DoS(100, error("%s : auxpow blocks are not allowed at height %d, parameters effective from %d",
-                                    __func__, pindexPrev->nHeight + 1, consensusParams.nHeightEffective),
-                         REJECT_INVALID, "early-auxpow-block");
+        // Dogecoin: Disallow AuxPow blocks before it is activated.
+        // NOTE: Previously this had its own fAllowAuxPoW flag, but that's always the opposite of fAllowLegacyBlocks
+        if (consensusParams.fAllowLegacyBlocks
+            && block.IsAuxpow())
+            return state.DoS(100, error("%s : auxpow blocks are not allowed at height %d, parameters effective from %d",
+                                        __func__, pindexPrev->nHeight + 1, consensusParams.nHeightEffective),
+                             REJECT_INVALID, "early-auxpow-block");
 
-    // Check proof of work
-    if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams))
-        return state.DoS(100, false, REJECT_INVALID, "bad-diffbits", false, "incorrect proof of work");
+        // Check proof of work
+        if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams))
+            return state.DoS(100, false, REJECT_INVALID, "bad-diffbits", false, "incorrect proof of work");
+    }
 
     // Check against checkpoints
     if (fCheckpointsEnabled) {

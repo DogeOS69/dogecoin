@@ -499,18 +499,41 @@ public:
     CShadowForkParams() {
         strNetworkID = "shadowfork";
 
-        // Get source chain from command line (default: main)
+        // Network isolation - unique magic bytes to prevent P2P cross-talk
+        pchMessageStart[0] = 0xfd;
+        pchMessageStart[1] = 0xfd;
+        pchMessageStart[2] = 0xfd;
+        pchMessageStart[3] = 0xfd;
+        nDefaultPort = 32556;
+        nPruneAfterHeight = 1000;
+
+        // No P2P seeds - this is an isolated environment
+        vSeeds.clear();
+        vFixedSeeds.clear();
+
+        // Dev-friendly flags (like regtest)
+        fMiningRequiresPeers = false;
+        fDefaultConsistencyChecks = true;
+        fRequireStandard = false;
+        fMineBlocksOnDemand = true;
+
+        chainTxData = ChainTxData{0, 0, 0};
+    }
+
+    /// Initialize source-chain-dependent state (genesis, consensus, prefixes).
+    /// Called during SelectParams(), after command-line args are parsed.
+    void InitFromSourceChain() {
         std::string sourceChain = GetArg("-shadowforkchain", "main");
 
-        // Get the source chain params to copy from
-        // Note: Invalid chains fall through to mainParams; validation happens in AppInitParameterInteraction
         const CChainParams* pSourceParams = (sourceChain == "test")
             ? static_cast<const CChainParams*>(&testNetParams)
             : static_cast<const CChainParams*>(&mainParams);
 
-        // Use regtest-style genesis with trivial difficulty for fast mining
-        // (0x207fffff = minimal difficulty, same as regtest)
-        genesis = CreateGenesisBlock(1296688602, 2, 0x207fffff, 1, 88 * COIN);
+        // Use the source chain's genesis block so that:
+        // 1. CheckBlockIndex passes (genesis hash matches consensus)
+        // 2. Source blocks can chain from genesis (hashPrevBlock is in mapBlockIndex)
+        // 3. Bootstrap data (copied blocks/chainstate) is fully consistent
+        genesis = pSourceParams->GenesisBlock();
 
         // Copy base consensus from source (will be modified below)
         consensus = pSourceParams->GetConsensus(0);
@@ -524,18 +547,17 @@ public:
         consensus.fPowNoRetargeting = true;
         consensus.fPowAllowMinDifficultyBlocks = true;
 
-        // Allow legacy (non-AuxPoW) blocks - bypasses AuxPoW requirement
+        // Allow legacy blocks (block type enforcement is bypassed via
+        // fShadowForkMode in ContextualCheckBlockHeader)
         consensus.fAllowLegacyBlocks = true;
 
         // Reset chain work/assume valid to zero for fresh sync
         consensus.nMinimumChainWork = uint256S("0x00");
         consensus.defaultAssumeValid = uint256S("0x00");
 
-        // Fast coinbase maturity for dev convenience (note: GetArg works here
-        // because SelectParams is called after ParseParameters)
+        // Fast coinbase maturity for dev convenience
         consensus.nCoinbaseMaturity = GetArg("-shadowforkmaturity", 1);
 
-        // Use the same genesis hash
         consensus.hashGenesisBlock = genesis.GetHash();
 
         // Set up consensus tree (single node - no height transitions needed)
@@ -544,14 +566,6 @@ public:
         consensus.pRight = nullptr;
         pConsensusRoot = &consensus;
 
-        // Network isolation - unique magic bytes to prevent P2P cross-talk
-        pchMessageStart[0] = 0xfd;
-        pchMessageStart[1] = 0xfd;
-        pchMessageStart[2] = 0xfd;
-        pchMessageStart[3] = 0xfd;
-        nDefaultPort = 32556;
-        nPruneAfterHeight = 1000;
-
         // Copy address prefixes from source chain for compatibility
         base58Prefixes[PUBKEY_ADDRESS] = pSourceParams->Base58Prefix(PUBKEY_ADDRESS);
         base58Prefixes[SCRIPT_ADDRESS] = pSourceParams->Base58Prefix(SCRIPT_ADDRESS);
@@ -559,26 +573,10 @@ public:
         base58Prefixes[EXT_PUBLIC_KEY] = pSourceParams->Base58Prefix(EXT_PUBLIC_KEY);
         base58Prefixes[EXT_SECRET_KEY] = pSourceParams->Base58Prefix(EXT_SECRET_KEY);
 
-        // No P2P seeds - this is an isolated environment
-        vSeeds.clear();
-        vFixedSeeds.clear();
-
-        // Dev-friendly flags (like regtest)
-        fMiningRequiresPeers = false;
-        fDefaultConsistencyChecks = true;
-        fRequireStandard = false;
-        fMineBlocksOnDemand = true;
-
         // Minimal checkpoints - just genesis
         checkpointData = (CCheckpointData){
             boost::assign::map_list_of
             (0, consensus.hashGenesisBlock)
-        };
-
-        chainTxData = ChainTxData{
-            0,
-            0,
-            0
         };
     }
 };
@@ -622,6 +620,9 @@ CChainParams& Params(const std::string& chain)
 void SelectParams(const std::string& network)
 {
     SelectBaseParams(network);
+    if (network == CBaseChainParams::SHADOWFORK) {
+        shadowForkParams.InitFromSourceChain();
+    }
     pCurrentParams = &Params(network);
 }
 
