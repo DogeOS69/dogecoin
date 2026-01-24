@@ -129,3 +129,6 @@ stage/
 *.iws
 *.iml
 *.ipr
+
+# AI context
+references/
