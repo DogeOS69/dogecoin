@@ -173,7 +173,19 @@ def create_funding_tx(node, script_pubkey, amount_satoshi):
     if not utxos:
         raise RuntimeError("No spendable UTXOs available")
 
-    utxo = utxos[0]
+    # Select a UTXO large enough to cover amount + fee
+    # Fee is 1 DOGE, so minimum required is amount_satoshi + COIN
+    min_required = amount_satoshi + COIN
+    utxo = None
+    for u in sorted(utxos, key=lambda x: x['amount'], reverse=True):
+        if int(u['amount'] * COIN) >= min_required:
+            utxo = u
+            break
+
+    if utxo is None:
+        raise RuntimeError(f"No UTXO large enough (need {min_required/COIN} DOGE, "
+                          f"max available: {max(u['amount'] for u in utxos)})")
+
     utxo_amount = int(utxo['amount'] * COIN)
 
     # Build the transaction
@@ -188,8 +200,8 @@ def create_funding_tx(node, script_pubkey, amount_satoshi):
     spk = bytes(script_pubkey) if isinstance(script_pubkey, CScript) else script_pubkey
     tx.vout.append(CTxOut(amount_satoshi, spk))
 
-    # Change output (fee: 10000 satoshi)
-    fee = 10000
+    # Change output (fee: 1 DOGE - Dogecoin has higher fee requirements)
+    fee = 1 * COIN
     change_amount = utxo_amount - amount_satoshi - fee
     if change_amount > 0:
         change_addr = node.getnewaddress()

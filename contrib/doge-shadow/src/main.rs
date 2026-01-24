@@ -172,7 +172,40 @@ impl Config {
 
 /// Shadow fork orchestration CLI for Dogecoin Core
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author,
+    version,
+    about,
+    long_about = r#"
+Shadow fork mode creates an isolated blockchain that forks from mainnet/testnet
+state at a specified height. Features:
+
+  - Trivial PoW: Mining difficulty set to minimum (instant blocks)
+  - Sentinel signatures: Spend any UTXO without the private key
+  - Chain stepping: Import canonical blocks from source chain
+
+EXAMPLES:
+  # Start shadow fork from testnet at height 1000
+  doge-shadow start --chain test --height 1000
+
+  # Step 10 blocks from local testnet node
+  doge-shadow step --source-rpcport 44555 --count 10
+
+  # Mine a block to an address
+  doge-shadow mine-block --address D6...abc
+
+  # Get sentinel signature for crafting transactions
+  doge-shadow sentinel-sig
+
+CONFIGURATION:
+  Config file locations (in order of precedence):
+    1. ./doge-shadow.toml
+    2. ~/.doge-shadow.toml
+    3. ~/.config/doge-shadow/config.toml
+
+  Environment variables: DOGE_SHADOW_* (see --help for each command)
+"#
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
