@@ -1,0 +1,40 @@
+# Docker Compose for Dogecoin Testnet Node
+#
+# Build and run:
+#   cd contrib/docker/testnet-node
+#   docker-compose up -d
+#
+# Check sync:
+#   docker-compose exec testnet-node dogecoin-cli getblockchaininfo
+
+services:
+  testnet-node:
+    build:
+      context: ../../..  # Repo root
+      dockerfile: contrib/docker/testnet-node/Dockerfile
+    image: dogecoin-testnet:local
+    container_name: dogecoin-testnet
+    restart: unless-stopped
+    ports:
+      - "44555:44555"  # RPC
+      - "44556:44556"  # P2P
+    volumes:
+      - testnet-data:/data
+      - ./config:/config:ro
+    environment:
+      - DOGECOIN_DATA=/data
+      - DOGECOIN_CONF=/config/dogecoin.conf
+      - RPC_USER=shadowfork
+      - RPC_PASS=shadowfork_testnet_password
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "-u", "shadowfork:shadowfork_testnet_password",
+             "--data-binary", '{"jsonrpc":"1.0","method":"getblockchaininfo","params":[]}',
+             "http://127.0.0.1:44555/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  testnet-data:
+    driver: local
