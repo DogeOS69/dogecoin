@@ -48,7 +48,7 @@ docker-compose down
 - Multi-stage build (builder → runtime)
 - Stripped binaries (dogecoind: 103MB → 5.2MB)
 - Minimal runtime dependencies
-- No wallet support (reduces attack surface)
+- With wallet support (needed for mining via generatetoaddress)
 
 ## Configuration
 
