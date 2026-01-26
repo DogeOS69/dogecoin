@@ -504,11 +504,16 @@ UniValue getblocktemplate(const JSONRPCRequest& request)
     if(!g_connman)
         throw JSONRPCError(RPC_CLIENT_P2P_DISABLED, "Error: Peer-to-peer functionality missing or disabled");
 
-    if (g_connman->GetNodeCount(CConnman::CONNECTIONS_ALL) == 0)
-        throw JSONRPCError(RPC_CLIENT_NOT_CONNECTED, "Dogecoin is not connected!");
+    // Shadow fork mode: bypass peer connection and IBD checks to allow getblocktemplate
+    // in isolated environments without network peers
+    const Consensus::Params& earlyConsensusParams = Params().GetConsensus(chainActive.Height());
+    if (!earlyConsensusParams.fShadowForkMode) {
+        if (g_connman->GetNodeCount(CConnman::CONNECTIONS_ALL) == 0)
+            throw JSONRPCError(RPC_CLIENT_NOT_CONNECTED, "Dogecoin is not connected!");
 
-    if (IsInitialBlockDownload())
-        throw JSONRPCError(RPC_CLIENT_IN_INITIAL_DOWNLOAD, "Dogecoin is downloading blocks...");
+        if (IsInitialBlockDownload())
+            throw JSONRPCError(RPC_CLIENT_IN_INITIAL_DOWNLOAD, "Dogecoin is downloading blocks...");
+    }
 
     static unsigned int nTransactionsUpdatedLast;
 
