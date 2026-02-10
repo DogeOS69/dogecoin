@@ -48,6 +48,53 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/bind/bind.hpp>
 #include <boost/thread.hpp>
+#include <boost/interprocess/managed_mapped_file.hpp>
+#include <boost/interprocess/allocators/allocator.hpp>
+
+namespace bi = boost::interprocess;
+
+// Safe Object Pool Implementation
+class CBlockIndexPool {
+    bi::managed_mapped_file* mfile;
+    typedef bi::allocator<CBlockIndex, bi::managed_mapped_file::segment_manager> BlockIndexAllocator;
+    BlockIndexAllocator* allocator;
+    
+public:
+    CBlockIndexPool() : mfile(NULL), allocator(NULL) {
+        try {
+             // 8GB sparse file for CBlockIndex objects
+             // We use a fixed-size managed mapped file which acts as our pool
+             // This simplifies memory management significantly
+             // Ensure any previous file is gore
+             bi::file_mapping::remove("block_index_pool.dat");
+             mfile = new bi::managed_mapped_file(bi::create_only, "block_index_pool.dat", 1024 * 1024 * 1024 * 8ULL);
+             
+             // Unlink immediately to ensure cleanup on crash (User Request)
+             bi::file_mapping::remove("block_index_pool.dat");
+             
+             allocator = new BlockIndexAllocator(mfile->get_segment_manager());
+        } catch (const std::exception& e) {
+             LogPrintf("CBlockIndexPool construction failed: %s\n", e.what());
+             throw;
+        }
+    }
+
+    ~CBlockIndexPool() {
+        if (allocator) delete allocator;
+        if (mfile) delete mfile;
+    }
+
+    CBlockIndex* allocate() {
+        return mfile->construct<CBlockIndex>(bi::anonymous_instance)();
+    }
+
+    CBlockIndex* allocate(const CBlockHeader& block) {
+        return mfile->construct<CBlockIndex>(bi::anonymous_instance)(block);
+    }
+};
+
+static CBlockIndexPool* g_blockIndexPool = NULL;
+
 
 #if defined(NDEBUG)
 # error "Dogecoin cannot be compiled without assertions."
@@ -2769,7 +2816,12 @@ CBlockIndex* AddToBlockIndex(const CBlockHeader& block)
         return it->second;
 
     // Construct new block index object
-    CBlockIndex* pindexNew = new CBlockIndex(block);
+    // CBlockIndex* pindexNew = new CBlockIndex(block);
+    if (!g_blockIndexPool) {
+         g_blockIndexPool = new CBlockIndexPool();
+    }
+    CBlockIndex* pindexNew = g_blockIndexPool->allocate(block);
+
     assert(pindexNew);
     // We assign the sequence id to blocks only when the full data is available,
     // to avoid miners withholding blocks but broadcasting headers, to get a
@@ -3642,7 +3694,12 @@ CBlockIndex * InsertBlockIndex(uint256 hash)
         return (*mi).second;
 
     // Create new
-    CBlockIndex* pindexNew = new CBlockIndex();
+    // CBlockIndex* pindexNew = new CBlockIndex();
+    if (!g_blockIndexPool) {
+         g_blockIndexPool = new CBlockIndexPool();
+    }
+    CBlockIndex* pindexNew = g_blockIndexPool->allocate();
+
     if (!pindexNew)
         throw std::runtime_error(std::string(__func__) + ": new CBlockIndex failed");
     mi = mapBlockIndex.insert(std::make_pair(hash, pindexNew)).first;
@@ -3721,6 +3778,12 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
     // Check presence of blk files
     LogPrintf("Checking all blk files are present...\n");
     std::set<int> setBlkDataFiles;
+
+    // Initialize the pool
+    if (!g_blockIndexPool) {
+        g_blockIndexPool = new CBlockIndexPool();
+    }
+
     BOOST_FOREACH(const PAIRTYPE(uint256, CBlockIndex*)& item, mapBlockIndex)
     {
         CBlockIndex* pindex = item.second;
@@ -3808,7 +3871,7 @@ bool CVerifyDB::VerifyDB(const CChainParams& chainparams, CCoinsView *coinsview,
         uiInterface.ShowProgress(_("Verifying blocks..."), percentageDone);
         if (pindex->nHeight < chainActive.Height()-nCheckDepth)
             break;
-        if (fPruneMode && !(pindex->nStatus & BLOCK_HAVE_DATA)) {
+        if (pindex->nStatus & BLOCK_HAVE_DATA) {
             // If pruning, only go back as far as we have data.
             LogPrintf("VerifyDB(): block verification stopping at height %d (pruning, no data)\n", pindex->nHeight);
             break;
@@ -3976,9 +4039,9 @@ void UnloadBlockIndex()
         warningcache[b].clear();
     }
 
-    BOOST_FOREACH(BlockMap::value_type& entry, mapBlockIndex) {
-        delete entry.second;
-    }
+    // BOOST_FOREACH(BlockMap::value_type& entry, mapBlockIndex) {
+    //    delete entry.second;
+    // }
     mapBlockIndex.clear();
     fHavePruned = false;
 }

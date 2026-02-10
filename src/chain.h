@@ -13,7 +13,9 @@
 #include "pow.h"
 #include "tinyformat.h"
 #include "uint256.h"
+#include "serialize.h"
 
+#include <stddef.h>
 #include <vector>
 
 class CBlockFileInfo
@@ -233,6 +235,16 @@ public:
     CBlockIndex()
     {
         SetNull();
+    }
+
+    // MMAP Optimization: Memory is managed by a pool.
+    // To prevent "double free" or "invalid pointer" errors if standard delete is called,
+    // we override delete to be a no-op.
+    static void operator delete(void* ptr) {
+        // No-op
+    }
+    static void operator delete(void* ptr, size_t sz) {
+        // No-op
     }
 
     CBlockIndex(const CBlockHeader& block)
