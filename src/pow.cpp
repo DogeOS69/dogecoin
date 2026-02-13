@@ -37,6 +37,10 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
     if (pindexLast == NULL)
         return nProofOfWorkLimit;
 
+    // Shadow fork / regtest: always minimum difficulty (instant mining)
+    if (params.fPowNoRetargeting)
+        return nProofOfWorkLimit;
+
     // Dogecoin: Special rules for minimum difficulty blocks with Digishield
     if (AllowDigishieldMinDifficultyForBlock(pindexLast, pblock, params))
     {
