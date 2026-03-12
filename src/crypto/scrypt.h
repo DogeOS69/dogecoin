@@ -7,6 +7,9 @@
 #define BITCOIN_CRYPTO_SCRYPT_H
 #include <stdlib.h>
 #include <stdint.h>
+#ifdef __APPLE__
+#include <sys/endian.h>
+#endif
 
 #if defined(HAVE_CONFIG_H)
 #include "bitcoin-config.h" // for USE_SSE2
@@ -36,7 +39,7 @@ void
 PBKDF2_SHA256(const uint8_t *passwd, size_t passwdlen, const uint8_t *salt,
     size_t saltlen, uint64_t c, uint8_t *buf, size_t dkLen);
 
-#ifndef __FreeBSD__
+#if !defined(__FreeBSD__) && !defined(__APPLE__)
 static inline uint32_t le32dec(const void *pp)
 {
         const uint8_t *p = (uint8_t const *)pp;
