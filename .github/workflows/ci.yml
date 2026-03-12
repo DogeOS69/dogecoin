@@ -227,7 +227,7 @@ jobs:
                procps bison python3 python3-pip python3-setuptools python3-wheel
           apt-get install -y ${{ matrix.packages }}
           python3 -m pip install setuptools==70.3.0 --upgrade
-          python3 -m pip install "lief==0.16.5"
+          python3 -m pip install "lief==0.12.3"
 
       - name: Post install
         if: ${{ matrix.postinstall }}
