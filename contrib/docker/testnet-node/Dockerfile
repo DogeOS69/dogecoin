@@ -1,11 +1,13 @@
-# Dockerfile for Dogecoin Testnet Node
+# Dockerfile for Dogecoin Node (supports mainnet and testnet via NETWORK env var)
 # Multi-stage build: compiles dogecoind in container for library compatibility
 #
 # Build from repo root:
-#   docker build -f contrib/docker/testnet-node/Dockerfile -t dogecoin-testnet .
+#   docker build -f contrib/docker/testnet-node/Dockerfile -t dogecoin:latest-shadowfork .
 #
-# Run:
-#   docker run -v testnet-data:/data -p 44555:44555 -p 44556:44556 dogecoin-testnet
+# Run (testnet, default):
+#   docker run -v testnet-data:/data -p 44555:44555 -p 44556:44556 dogecoin:latest-shadowfork
+# Run (mainnet):
+#   docker run -e NETWORK=mainnet -v mainnet-data:/data -p 22555:22555 -p 22556:22556 dogecoin:latest-shadowfork
 
 # =============================================================================
 # Stage 1: Build dogecoind from source
@@ -93,15 +95,15 @@ RUN chmod 755 /entrypoint.sh
 ENV DOGECOIN_DATA=/data
 ENV DOGECOIN_CONF=/config/dogecoin.conf
 
-# Expose testnet ports (P2P: 44556, RPC: 44555)
-EXPOSE 44555 44556
+# Expose both mainnet (22555/22556) and testnet (44555/44556) ports
+EXPOSE 22555 22556 44555 44556
 
-# Health check via RPC
+# Health check via RPC (port depends on NETWORK: mainnet=22555, testnet=44555)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -sf --user "${RPC_USER:-test}:${RPC_PASS:-test}" \
         -d '{"jsonrpc":"1.0","method":"getblockchaininfo","params":[]}' \
         -H 'content-type: text/plain;' \
-        http://127.0.0.1:44555/ || exit 1
+        http://127.0.0.1:${RPC_PORT:-44555}/ || exit 1
 
 USER dogecoin
 WORKDIR /home/dogecoin
