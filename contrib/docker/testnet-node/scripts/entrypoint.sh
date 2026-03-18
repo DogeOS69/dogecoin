@@ -29,32 +29,36 @@ echo "Config: $CONF_FILE"
 # Ensure testnet3 subdirectory exists (dogecoind creates it, but we verify)
 mkdir -p "$DATA_DIR/testnet3"
 
-# Build command
-CMD="$DOGECOIND"
-CMD="$CMD -datadir=$DATA_DIR"
-CMD="$CMD -testnet"  # Must be on CLI - conf file testnet=1 doesn't set datadir path correctly
-CMD="$CMD -printtoconsole"  # Log to stdout for docker logs
-CMD="$CMD -rpcbind=0.0.0.0"  # Must be on CLI for docker port forwarding
-CMD="$CMD -rpcallowip=0.0.0.0/0"  # Allow RPC from any IP (docker network)
-CMD="$CMD -rpcuser=${RPC_USER:-shadowfork}"
-CMD="$CMD -rpcpassword=${RPC_PASS:-shadowfork_testnet_password}"
+# Build command as an argv array so extra args are passed safely.
+CMD=(
+    "$DOGECOIND"
+    "-datadir=$DATA_DIR"
+    "-testnet"  # Must be on CLI - conf file testnet=1 doesn't set datadir path correctly
+    "-printtoconsole"  # Log to stdout for docker logs
+    "-rpcbind=0.0.0.0"  # Must be on CLI for docker port forwarding
+    "-rpcallowip=0.0.0.0/0"  # Allow RPC from any IP (docker network)
+    "-rpcuser=${RPC_USER:-shadowfork}"
+    "-rpcpassword=${RPC_PASS:-shadowfork_testnet_password}"
+)
 
 if [ -f "$CONF_FILE" ]; then
-    CMD="$CMD -conf=$CONF_FILE"
+    CMD+=("-conf=$CONF_FILE")
 else
     echo "WARNING: Config file not found at $CONF_FILE"
 fi
 
-# Add any extra arguments passed to the container
-if [ "$1" != "dogecoind" ]; then
-    # If first arg is not 'dogecoind', add all args
-    CMD="$CMD $@"
-elif [ $# -gt 1 ]; then
-    # Skip 'dogecoind' and add remaining args
-    shift
-    CMD="$CMD $@"
+# Skip a redundant dogecoind executable passed in via docker-compose `command`.
+if [ $# -gt 0 ]; then
+    first_arg="${1##*/}"
+    if [ "$first_arg" = "dogecoind" ]; then
+        shift
+    fi
 fi
 
-echo "Starting: $CMD"
+if [ $# -gt 0 ]; then
+    CMD+=("$@")
+fi
+
+echo "Starting: ${CMD[*]}"
 echo "==========================="
-exec $CMD
+exec "${CMD[@]}"

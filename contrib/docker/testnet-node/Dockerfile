@@ -39,7 +39,8 @@ COPY . .
 # Build dogecoind with wallet support (needed for generatetoaddress mining).
 # --with-incompatible-bdb: accept system BDB 5.3 (matches libdb5.3++-dev above).
 # Strip binaries to reduce image size.
-RUN ./autogen.sh \
+RUN make distclean || true \
+    && ./autogen.sh \
     && ./configure \
         --disable-tests \
         --disable-bench \
