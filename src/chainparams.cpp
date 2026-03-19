@@ -525,9 +525,13 @@ public:
     void InitFromSourceChain() {
         std::string sourceChain = GetArg("-shadowforkchain", "main");
 
-        const CChainParams* pSourceParams = (sourceChain == "test")
-            ? static_cast<const CChainParams*>(&testNetParams)
-            : static_cast<const CChainParams*>(&mainParams);
+        const CChainParams* pSourceParams;
+        if (sourceChain == "test")
+            pSourceParams = static_cast<const CChainParams*>(&testNetParams);
+        else if (sourceChain == "regtest")
+            pSourceParams = static_cast<const CChainParams*>(&regTestParams);
+        else
+            pSourceParams = static_cast<const CChainParams*>(&mainParams);
 
         // Use the source chain's genesis block so that:
         // 1. CheckBlockIndex passes (genesis hash matches consensus)

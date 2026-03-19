@@ -910,8 +910,8 @@ bool AppInitParameterInteraction()
         }
 
         std::string sourceChain = GetArg("-shadowforkchain", "main");
-        if (sourceChain != "main" && sourceChain != "test") {
-            return InitError(_("Shadow fork source chain must be 'main' or 'test'."));
+        if (sourceChain != "main" && sourceChain != "test" && sourceChain != "regtest") {
+            return InitError(_("Shadow fork source chain must be 'main', 'test', or 'regtest'."));
         }
 
         int64_t nMaturity = GetArg("-shadowforkmaturity", 1);
