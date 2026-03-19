@@ -551,6 +551,12 @@ public:
         consensus.fPowNoRetargeting = true;
         consensus.fPowAllowMinDifficultyBlocks = true;
 
+        // Use simplified (constant) block rewards. The old random reward
+        // formula overflows when halvings >= 20 (height ~2M+) because
+        // (1000000 >> halvings) - 1 goes negative, causing
+        // boost::uniform_int(1, maxReward) to assert min <= max.
+        consensus.fSimplifiedRewards = true;
+
         // Allow legacy blocks (block type enforcement is bypassed via
         // fShadowForkMode in ContextualCheckBlockHeader)
         consensus.fAllowLegacyBlocks = true;

@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-# Entrypoint for Dogecoin testnet node
+# Entrypoint for Dogecoin node
+# Supports both mainnet and testnet via NETWORK env var
 # Supports both built-in binaries (multi-stage) and mounted binaries
 
 # Find dogecoind binary
@@ -18,21 +19,25 @@ else
     exit 1
 fi
 
+NETWORK="${NETWORK:-testnet}"
 DATA_DIR="${DOGECOIN_DATA:-/data}"
 CONF_FILE="${DOGECOIN_CONF:-/config/dogecoin.conf}"
 
-echo "=== Dogecoin Testnet Node ==="
+echo "=== Dogecoin Node ($NETWORK) ==="
 echo "Binary: $DOGECOIND"
 echo "Data: $DATA_DIR"
 echo "Config: $CONF_FILE"
 
-# Ensure testnet3 subdirectory exists (dogecoind creates it, but we verify)
-mkdir -p "$DATA_DIR/testnet3"
-
 # Build command
 CMD="$DOGECOIND"
 CMD="$CMD -datadir=$DATA_DIR"
-CMD="$CMD -testnet"  # Must be on CLI - conf file testnet=1 doesn't set datadir path correctly
+
+if [ "$NETWORK" = "testnet" ]; then
+    # Ensure testnet3 subdirectory exists (dogecoind creates it, but we verify)
+    mkdir -p "$DATA_DIR/testnet3"
+    CMD="$CMD -testnet"
+fi
+
 CMD="$CMD -printtoconsole"  # Log to stdout for docker logs
 CMD="$CMD -rpcbind=0.0.0.0"  # Must be on CLI for docker port forwarding
 CMD="$CMD -rpcallowip=0.0.0.0/0"  # Allow RPC from any IP (docker network)
