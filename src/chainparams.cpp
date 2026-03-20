@@ -533,6 +533,11 @@ public:
         else
             pSourceParams = static_cast<const CChainParams*>(&mainParams);
 
+        // Use the source chain's message start bytes so that the block
+        // file reader can find blocks in the copied .dat files (they are
+        // serialized with the source chain's magic bytes).
+        memcpy(pchMessageStart, pSourceParams->MessageStart(), sizeof(pchMessageStart));
+
         // Use the source chain's genesis block so that:
         // 1. CheckBlockIndex passes (genesis hash matches consensus)
         // 2. Source blocks can chain from genesis (hashPrevBlock is in mapBlockIndex)

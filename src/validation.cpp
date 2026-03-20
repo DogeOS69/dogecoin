@@ -1235,8 +1235,14 @@ bool IsInitialBlockDownload()
         return true;
     if (chainActive.Tip()->nChainWork < UintToArith256(chainParams.GetConsensus(chainActive.Height()).nMinimumChainWork))
         return true;
-    if (chainActive.Tip()->GetBlockTime() < (GetTime() - nMaxTipAge))
-        return true;
+    // Shadow fork mode: skip tip age check. The fork is bootstrapped from
+    // source chain data which may have old timestamps (especially regtest
+    // where block timestamps start at genesis epoch 2011). The fork is
+    // by definition up-to-date since it was just created from the source.
+    if (!chainParams.GetConsensus(chainActive.Height()).fShadowForkMode) {
+        if (chainActive.Tip()->GetBlockTime() < (GetTime() - nMaxTipAge))
+            return true;
+    }
     latchToFalse.store(true, std::memory_order_relaxed);
     return false;
 }
