@@ -102,6 +102,11 @@ const std::string strMessageMagic = "Dogecoin Signed Message:\n";
 // Internal stuff
 namespace {
 
+    bool IsShadowForkOptimizationEnabled(const CChainParams& params, const char* arg)
+    {
+        return params.GetConsensus(0).fShadowForkMode && GetBoolArg(arg, true);
+    }
+
     struct CBlockIndexWorkComparator
     {
         bool operator()(CBlockIndex *pa, CBlockIndex *pb) const {
@@ -2072,6 +2077,11 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 bool static FlushStateToDisk(CValidationState &state, FlushStateMode mode, int nManualPruneHeight) {
     int64_t nMempoolUsage = mempool.DynamicMemoryUsage();
     const CChainParams& chainparams = Params();
+    if ((mode == FLUSH_STATE_IF_NEEDED || mode == FLUSH_STATE_PERIODIC) &&
+        IsShadowForkOptimizationEnabled(chainparams, "-shadowforkdeferchainstateflush")) {
+        LogPrint("bench", "FlushStateToDisk: deferred automatic shadow fork flush (mode=%d)\n", mode);
+        return true;
+    }
     LOCK2(cs_main, cs_LastBlockFile);
     static int64_t nLastWrite = 0;
     static int64_t nLastFlush = 0;
@@ -2196,7 +2206,10 @@ void static UpdateTip(CBlockIndex *pindexNew, const CChainParams& chainParams) {
 
     static bool fWarned = false;
     std::vector<std::string> warningMessages;
-    if (!IsInitialBlockDownload())
+    const bool fInitialBlockDownload = IsInitialBlockDownload();
+    const bool fSkipShadowForkVersionbitsWarnings =
+        IsShadowForkOptimizationEnabled(chainParams, "-shadowforkskipversionbitswarnings");
+    if (!fInitialBlockDownload && !fSkipShadowForkVersionbitsWarnings)
     {
         int nUpgraded = 0;
         const CBlockIndex* pindex = chainActive.Tip();
@@ -2237,14 +2250,18 @@ void static UpdateTip(CBlockIndex *pindexNew, const CChainParams& chainParams) {
             }
         }
     }
-    LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu date='%s' progress=%f cache=%.1fMiB(%utx)", __func__,
-      chainActive.Tip()->GetBlockHash().ToString(), chainActive.Height(), chainActive.Tip()->nVersion,
-      log(chainActive.Tip()->nChainWork.getdouble())/log(2.0), (unsigned long)chainActive.Tip()->nChainTx,
-      DateTimeStrFormat("%Y-%m-%d %H:%M:%S", chainActive.Tip()->GetBlockTime()),
-      GuessVerificationProgress(chainParams.TxData(), chainActive.Tip()), pcoinsTip->DynamicMemoryUsage() * (1.0 / (1<<20)), pcoinsTip->GetCacheSize());
-    if (!warningMessages.empty())
-        LogPrintf(" warning='%s'", boost::algorithm::join(warningMessages, ", "));
-    LogPrintf("\n");
+    const bool fSuppressShadowForkIbdLogs =
+        IsShadowForkOptimizationEnabled(chainParams, "-shadowforksuppressibdlogs");
+    if (!fSuppressShadowForkIbdLogs || !fInitialBlockDownload) {
+        LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu date='%s' progress=%f cache=%.1fMiB(%utx)", __func__,
+          chainActive.Tip()->GetBlockHash().ToString(), chainActive.Height(), chainActive.Tip()->nVersion,
+          log(chainActive.Tip()->nChainWork.getdouble())/log(2.0), (unsigned long)chainActive.Tip()->nChainTx,
+          DateTimeStrFormat("%Y-%m-%d %H:%M:%S", chainActive.Tip()->GetBlockTime()),
+          GuessVerificationProgress(chainParams.TxData(), chainActive.Tip()), pcoinsTip->DynamicMemoryUsage() * (1.0 / (1<<20)), pcoinsTip->GetCacheSize());
+        if (!warningMessages.empty())
+            LogPrintf(" warning='%s'", boost::algorithm::join(warningMessages, ", "));
+        LogPrintf("\n");
+    }
 
 }
 
@@ -2944,7 +2961,9 @@ bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, bool f
     // We don't have block height as this is called without context (i.e. without
     // knowing the previous block), but that's okay, as the checks done are permissive
     // (i.e. doesn't check work limit or whether AuxPoW is enabled)
-    if (fCheckPOW && !CheckAuxPowProofOfWork(block, Params().GetConsensus(0)))
+    const Consensus::Params& consensus = Params().GetConsensus(0);
+    const bool fSkipShadowForkPow = consensus.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true);
+    if (fCheckPOW && !fSkipShadowForkPow && !CheckAuxPowProofOfWork(block, consensus))
         return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
 
     return true;
@@ -3659,12 +3678,19 @@ CBlockIndex * InsertBlockIndex(uint256 hash)
 
 bool static LoadBlockIndexDB(const CChainParams& chainparams)
 {
+    const int64_t nLoadStart = GetTimeMillis();
+    const bool fShadowForkFastCandidates =
+        IsShadowForkOptimizationEnabled(chainparams, "-shadowforkfastblockindexcandidates");
+
     if (!pblocktree->LoadBlockIndexGuts(InsertBlockIndex))
         return false;
+    LogPrintf("%s: loaded %u block index entries in %dms\n",
+        __func__, (unsigned int)mapBlockIndex.size(), GetTimeMillis() - nLoadStart);
 
     boost::this_thread::interruption_point();
 
     // Calculate nChainWork
+    const int64_t nSortStart = GetTimeMillis();
     std::vector<std::pair<int, CBlockIndex*> > vSortedByHeight;
     vSortedByHeight.reserve(mapBlockIndex.size());
     BOOST_FOREACH(const PAIRTYPE(uint256, CBlockIndex*)& item, mapBlockIndex)
@@ -3673,6 +3699,10 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
         vSortedByHeight.push_back(std::make_pair(pindex->nHeight, pindex));
     }
     sort(vSortedByHeight.begin(), vSortedByHeight.end());
+    LogPrintf("%s: sorted block index by height in %dms\n",
+        __func__, GetTimeMillis() - nSortStart);
+
+    const int64_t nPostProcessStart = GetTimeMillis();
     BOOST_FOREACH(const PAIRTYPE(int, CBlockIndex*)& item, vSortedByHeight)
     {
         CBlockIndex* pindex = item.second;
@@ -3697,7 +3727,7 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
                 setDirtyBlockIndex.insert(pindex);
             }
         }
-        if (pindex->IsValid(BLOCK_VALID_TRANSACTIONS) && (pindex->nChainTx || pindex->pprev == NULL))
+        if (!fShadowForkFastCandidates && pindex->IsValid(BLOCK_VALID_TRANSACTIONS) && (pindex->nChainTx || pindex->pprev == NULL))
             setBlockIndexCandidates.insert(pindex);
         if (pindex->nStatus & BLOCK_FAILED_MASK && (!pindexBestInvalid || pindex->nChainWork > pindexBestInvalid->nChainWork))
             pindexBestInvalid = pindex;
@@ -3706,6 +3736,8 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
         if (pindex->IsValid(BLOCK_VALID_TREE) && (pindexBestHeader == NULL || CBlockIndexWorkComparator()(pindexBestHeader, pindex)))
             pindexBestHeader = pindex;
     }
+    LogPrintf("%s: post-processed block index in %dms (shadowfork_fast_candidates=%d)\n",
+        __func__, GetTimeMillis() - nPostProcessStart, fShadowForkFastCandidates);
 
     // Load block file info
     pblocktree->ReadLastBlockFile(nLastBlockFile);
@@ -3762,7 +3794,12 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
         return true;
     chainActive.SetTip(it->second);
 
-    PruneBlockIndexCandidates();
+    if (fShadowForkFastCandidates) {
+        setBlockIndexCandidates.insert(chainActive.Tip());
+        LogPrintf("%s: shadow fork fast candidates enabled; inserted active tip only\n", __func__);
+    } else {
+        PruneBlockIndexCandidates();
+    }
 
     LogPrintf("%s: hashBestChain=%s height=%d date=%s progress=%f\n", __func__,
         chainActive.Tip()->GetBlockHash().ToString(), chainActive.Height(),
@@ -3878,6 +3915,11 @@ bool CVerifyDB::VerifyDB(const CChainParams& chainparams, CCoinsView *coinsview,
 bool RewindBlockIndex(const CChainParams& params)
 {
     LOCK(cs_main);
+
+    if (IsShadowForkOptimizationEnabled(params, "-shadowforkskiprewind")) {
+        LogPrintf("RewindBlockIndex: skipped in shadow fork mode\n");
+        return true;
+    }
 
     int nHeight = 1;
     while (nHeight <= chainActive.Height()) {

@@ -125,30 +125,36 @@ UniValue generateBlocks(std::shared_ptr<CReserveScript> coinbaseScript, int nGen
             LOCK(cs_main);
             IncrementExtraNonce(pblock, chainActive.Tip(), nExtraNonce);
         }
-        if (!nMineAuxPow) {
-            while (nMaxTries > 0 && pblock->nNonce < nInnerLoopCount && !CheckProofOfWork(pblock->GetPoWHash(), pblock->nBits, Params().GetConsensus(nHeight))) {
+        const Consensus::Params& consensus = Params().GetConsensus(nHeight);
+        const bool fShadowForkInstantMining = consensus.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true);
+        if (fShadowForkInstantMining) {
+            LogPrintf("generateBlocks: shadow fork instant mining enabled; skipping local proof-of-work search\n");
+        } else if (!nMineAuxPow) {
+            while (nMaxTries > 0 && pblock->nNonce < nInnerLoopCount && !CheckProofOfWork(pblock->GetPoWHash(), pblock->nBits, consensus)) {
                 ++pblock->nNonce;
                 --nMaxTries;
             }
         } else {
             CAuxPow::initAuxPow(*pblock);
             CPureBlockHeader& miningHeader = pblock->auxpow->parentBlock;
-            while (nMaxTries > 0 && miningHeader.nNonce < nInnerLoopCount && !CheckProofOfWork(miningHeader.GetPoWHash(), pblock->nBits, Params().GetConsensus(nHeight))) {
+            while (nMaxTries > 0 && miningHeader.nNonce < nInnerLoopCount && !CheckProofOfWork(miningHeader.GetPoWHash(), pblock->nBits, consensus)) {
                 ++miningHeader.nNonce;
                 --nMaxTries;
             }
         }
-        if (nMaxTries == 0) {
-            break;
-        }
-        if (!nMineAuxPow) {
-            if (pblock->nNonce == nInnerLoopCount) {
-                continue;
+        if (!fShadowForkInstantMining) {
+            if (nMaxTries == 0) {
+                break;
             }
-        } else {
-            CPureBlockHeader& miningHeader = pblock->auxpow->parentBlock;
-            if (miningHeader.nNonce == nInnerLoopCount) {
-                continue;
+            if (!nMineAuxPow) {
+                if (pblock->nNonce == nInnerLoopCount) {
+                    continue;
+                }
+            } else {
+                CPureBlockHeader& miningHeader = pblock->auxpow->parentBlock;
+                if (miningHeader.nNonce == nInnerLoopCount) {
+                    continue;
+                }
             }
         }
         std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(*pblock);

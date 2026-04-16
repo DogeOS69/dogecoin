@@ -15,10 +15,14 @@
 FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_APT_MIRROR=
 
 # Install build dependencies
 # Note: libboost-all-dev ensures complete Boost installation with all linking deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN if [ -n "$UBUNTU_APT_MIRROR" ]; then \
+        sed -i "s|http://archive.ubuntu.com/ubuntu|$UBUNTU_APT_MIRROR|g" /etc/apt/sources.list; \
+    fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libtool \
     autotools-dev \
@@ -38,9 +42,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /dogecoin
 COPY . .
 
+ARG STRIP_BINARIES=1
+
 # Build dogecoind with wallet support (needed for generatetoaddress mining).
 # --with-incompatible-bdb: accept system BDB 5.3 (matches libdb5.3++-dev above).
-# Strip binaries to reduce image size.
+# Strip binaries by default to reduce image size.
 RUN ./autogen.sh \
     && ./configure \
         --disable-tests \
@@ -48,7 +54,7 @@ RUN ./autogen.sh \
         --without-gui \
         --with-incompatible-bdb \
     && make -j$(nproc) \
-    && strip src/dogecoind src/dogecoin-cli
+    && if [ "$STRIP_BINARIES" = "1" ]; then strip src/dogecoind src/dogecoin-cli; fi
 
 # =============================================================================
 # Stage 2: Runtime image (slim Debian for smaller footprint)
