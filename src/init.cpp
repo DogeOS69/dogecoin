@@ -477,6 +477,12 @@ std::string HelpMessage(HelpMessageMode mode)
         strUsage += HelpMessageOpt("-shadowfork=<height>", _("Enable shadow fork mode, forking from the specified block height"));
         strUsage += HelpMessageOpt("-shadowforkchain=<chain>", _("Source chain to fork from: main or test (default: main)"));
         strUsage += HelpMessageOpt("-shadowforkmaturity=<n>", strprintf(_("Coinbase maturity for shadow fork (default: %d)"), 1));
+        strUsage += HelpMessageOpt("-shadowforkfastblockindexcandidates", _("In shadow fork mode, populate block index candidates from the active tip only during startup (default: 1)"));
+        strUsage += HelpMessageOpt("-shadowforkdeferchainstateflush", _("In shadow fork mode, defer automatic IF_NEEDED/PERIODIC chainstate flushes; clean shutdown still flushes (default: 1)"));
+        strUsage += HelpMessageOpt("-shadowforkinstantmining", _("In shadow fork mode, skip local proof-of-work search and header proof-of-work verification for generated blocks (default: 1)"));
+        strUsage += HelpMessageOpt("-shadowforkskiprewind", _("In shadow fork mode, skip startup block-index rewind (default: 1)"));
+        strUsage += HelpMessageOpt("-shadowforksuppressibdlogs", _("In shadow fork mode, suppress per-block UpdateTip logs during initial block download (default: 1)"));
+        strUsage += HelpMessageOpt("-shadowforkskipversionbitswarnings", _("In shadow fork mode, skip UpdateTip versionbits and unexpected-version warning scans on the inherited block index (default: 1)"));
     }
 
     strUsage += HelpMessageGroup(_("Node relay options:"));

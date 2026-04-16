@@ -533,6 +533,11 @@ public:
         else
             pSourceParams = static_cast<const CChainParams*>(&mainParams);
 
+        // Keep the shadowfork P2P message start isolated while teaching the
+        // block/undo file reader to look for the source chain's on-disk magic.
+        memcpy(pchDiskMagic, pSourceParams->MessageStart(), sizeof(pchDiskMagic));
+        fHasDiskMagic = true;
+
         // Use the source chain's genesis block so that:
         // 1. CheckBlockIndex passes (genesis hash matches consensus)
         // 2. Source blocks can chain from genesis (hashPrevBlock is in mapBlockIndex)

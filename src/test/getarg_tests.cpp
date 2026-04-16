@@ -2,9 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include "chainparams.h"
 #include "util.h"
 #include "test/test_bitcoin.h"
 
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -81,6 +83,29 @@ BOOST_AUTO_TEST_CASE(boolarg)
     BOOST_CHECK(!GetBoolArg("-foo", false));
     BOOST_CHECK(!GetBoolArg("-foo", true));
 
+}
+
+BOOST_AUTO_TEST_CASE(shadowfork_regtest_uses_unique_p2p_magic_and_regtest_disk_magic)
+{
+    static const unsigned char shadowforkMessageStart[CMessageHeader::MESSAGE_START_SIZE] = {
+        0xfd, 0xfd, 0xfd, 0xfd,
+    };
+
+    ResetArgs("-shadowforkchain=regtest");
+    SelectParams(CBaseChainParams::SHADOWFORK);
+
+    const CChainParams& shadowParams = Params();
+    const CChainParams& regtestParams = Params(CBaseChainParams::REGTEST);
+
+    BOOST_CHECK_EQUAL(shadowParams.NetworkIDString(), CBaseChainParams::SHADOWFORK);
+    BOOST_CHECK(std::memcmp(shadowParams.MessageStart(), shadowforkMessageStart,
+                            CMessageHeader::MESSAGE_START_SIZE) == 0);
+    BOOST_CHECK(std::memcmp(shadowParams.DiskMagic(), regtestParams.MessageStart(),
+                            CMessageHeader::MESSAGE_START_SIZE) == 0);
+    BOOST_CHECK(shadowParams.GenesisBlock().GetHash() == regtestParams.GenesisBlock().GetHash());
+
+    ResetArgs("");
+    SelectParams(CBaseChainParams::MAIN);
 }
 
 BOOST_AUTO_TEST_CASE(stringarg)

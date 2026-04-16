@@ -62,6 +62,7 @@ public:
     }
 
     const CMessageHeader::MessageStartChars& MessageStart() const { return pchMessageStart; }
+    const CMessageHeader::MessageStartChars& DiskMagic() const { return fHasDiskMagic ? pchDiskMagic : pchMessageStart; }
     int GetDefaultPort() const { return nDefaultPort; }
 
     const CBlock& GenesisBlock() const { return genesis; }
@@ -83,11 +84,12 @@ public:
     const ChainTxData& TxData() const { return chainTxData; }
 
 protected:
-    CChainParams() {}
+    CChainParams() : fHasDiskMagic(false) {}
 
     Consensus::Params consensus;
     Consensus::Params *pConsensusRoot; // Binary search tree root
     CMessageHeader::MessageStartChars pchMessageStart;
+    CMessageHeader::MessageStartChars pchDiskMagic;
     int nDefaultPort;
     uint64_t nPruneAfterHeight;
     std::vector<CDNSSeedData> vSeeds;
@@ -101,6 +103,7 @@ protected:
     bool fMineBlocksOnDemand;
     CCheckpointData checkpointData;
     ChainTxData chainTxData;
+    bool fHasDiskMagic;
 };
 
 /**
