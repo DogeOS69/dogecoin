@@ -533,10 +533,10 @@ public:
         else
             pSourceParams = static_cast<const CChainParams*>(&mainParams);
 
-        // Use the source chain's message start bytes so that the block
-        // file reader can find blocks in the copied .dat files (they are
-        // serialized with the source chain's magic bytes).
-        memcpy(pchMessageStart, pSourceParams->MessageStart(), sizeof(pchMessageStart));
+        // Keep the shadowfork P2P message start isolated while teaching the
+        // block/undo file reader to look for the source chain's on-disk magic.
+        memcpy(pchDiskMagic, pSourceParams->MessageStart(), sizeof(pchDiskMagic));
+        fHasDiskMagic = true;
 
         // Use the source chain's genesis block so that:
         // 1. CheckBlockIndex passes (genesis hash matches consensus)

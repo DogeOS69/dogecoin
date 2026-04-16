@@ -2034,7 +2034,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
             CDiskBlockPos _pos;
             if (!FindUndoPos(state, pindex->nFile, _pos, ::GetSerializeSize(blockundo, SER_DISK, CLIENT_VERSION) + 40))
                 return error("ConnectBlock(): FindUndoPos failed");
-            if (!UndoWriteToDisk(blockundo, _pos, pindex->pprev->GetBlockHash(), chainparams.MessageStart()))
+            if (!UndoWriteToDisk(blockundo, _pos, pindex->pprev->GetBlockHash(), chainparams.DiskMagic()))
                 return AbortNode(state, "Failed to write undo data");
 
             // update nUndoPos in block index
@@ -3390,7 +3390,7 @@ static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidation
         if (!FindBlockPos(state, blockPos, nBlockSize+8, nHeight, block.GetBlockTime(), dbp != NULL))
             return error("AcceptBlock(): FindBlockPos failed");
         if (dbp == NULL)
-            if (!WriteBlockToDisk(block, blockPos, chainparams.MessageStart()))
+            if (!WriteBlockToDisk(block, blockPos, chainparams.DiskMagic()))
                 AbortNode(state, "Failed to write block");
         if (!ReceivedBlockTransactions(block, state, pindex, blockPos))
             return error("AcceptBlock(): ReceivedBlockTransactions failed");
@@ -4062,7 +4062,7 @@ bool InitBlockIndex(const CChainParams& chainparams)
             CValidationState state;
             if (!FindBlockPos(state, blockPos, nBlockSize+8, 0, block.GetBlockTime()))
                 return error("LoadBlockIndex(): FindBlockPos failed");
-            if (!WriteBlockToDisk(block, blockPos, chainparams.MessageStart()))
+            if (!WriteBlockToDisk(block, blockPos, chainparams.DiskMagic()))
                 return error("LoadBlockIndex(): writing genesis block to disk failed");
             CBlockIndex *pindex = AddToBlockIndex(block);
             if (!ReceivedBlockTransactions(block, state, pindex, blockPos))
@@ -4098,10 +4098,10 @@ bool LoadExternalBlockFile(const CChainParams& chainparams, FILE* fileIn, CDiskB
             try {
                 // locate a header
                 unsigned char buf[CMessageHeader::MESSAGE_START_SIZE];
-                blkdat.FindByte(chainparams.MessageStart()[0]);
+                blkdat.FindByte(chainparams.DiskMagic()[0]);
                 nRewind = blkdat.GetPos()+1;
                 blkdat >> FLATDATA(buf);
-                if (memcmp(buf, chainparams.MessageStart(), CMessageHeader::MESSAGE_START_SIZE))
+                if (memcmp(buf, chainparams.DiskMagic(), CMessageHeader::MESSAGE_START_SIZE))
                     continue;
                 // read size
                 blkdat >> nSize;
