@@ -21,7 +21,13 @@ fi
 
 NETWORK="${NETWORK:-testnet}"
 DATA_DIR="${DOGECOIN_DATA:-/data}"
-CONF_FILE="${DOGECOIN_CONF:-/config/dogecoin.conf}"
+if [ -n "${DOGECOIN_CONF:-}" ]; then
+    CONF_FILE="$DOGECOIN_CONF"
+elif [ "$NETWORK" = "testnet" ]; then
+    CONF_FILE="/config/dogecoin.conf"
+else
+    CONF_FILE="/config/dogecoin-mainnet.conf"
+fi
 
 echo "=== Dogecoin Node ($NETWORK) ==="
 echo "Binary: $DOGECOIND"

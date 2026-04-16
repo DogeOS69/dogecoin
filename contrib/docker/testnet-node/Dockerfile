@@ -106,10 +106,11 @@ EXPOSE 22555 22556 44555 44556
 
 # Health check via RPC (port depends on NETWORK: mainnet=22555, testnet=44555)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-    CMD curl -sf --user "${RPC_USER:-test}:${RPC_PASS:-test}" \
-        -d '{"jsonrpc":"1.0","method":"getblockchaininfo","params":[]}' \
-        -H 'content-type: text/plain;' \
-        http://127.0.0.1:${RPC_PORT:-44555}/ || exit 1
+    CMD RPC_PORT="${RPC_PORT:-$(if [ "${NETWORK:-testnet}" = "mainnet" ]; then echo 22555; else echo 44555; fi)}" \
+        && curl -sf --user "${RPC_USER:-shadowfork}:${RPC_PASS:-shadowfork_testnet_password}" \
+            -d '{"jsonrpc":"1.0","method":"getblockchaininfo","params":[]}' \
+            -H 'content-type: text/plain;' \
+            "http://127.0.0.1:${RPC_PORT}/" || exit 1
 
 USER dogecoin
 WORKDIR /home/dogecoin
