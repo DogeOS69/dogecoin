@@ -99,7 +99,8 @@ RUN chmod 755 /entrypoint.sh
 
 # Default environment
 ENV DOGECOIN_DATA=/data
-ENV DOGECOIN_CONF=/config/dogecoin.conf
+# Leave DOGECOIN_CONF unset by default so the entrypoint can choose a
+# network-appropriate config path unless the caller explicitly overrides it.
 
 # Expose both mainnet (22555/22556) and testnet (44555/44556) ports
 EXPOSE 22555 22556 44555 44556
