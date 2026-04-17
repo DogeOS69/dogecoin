@@ -56,12 +56,17 @@ UniValue GetNetworkHashPS(int lookup, int height) {
     if (lookup > pb->nHeight)
         lookup = pb->nHeight;
 
-    CBlockIndex *pb0 = pb;
+    CBlockIndex *pb0 = chainActive[pb->nHeight - lookup];
+    if (pb0 == NULL)
+        return 0;
+
     int64_t minTime = pb0->GetBlockTime();
     int64_t maxTime = minTime;
-    for (int i = 0; i < lookup; i++) {
-        pb0 = pb0->pprev;
-        int64_t time = pb0->GetBlockTime();
+    for (int cursor_height = pb0->nHeight + 1; cursor_height <= pb->nHeight; ++cursor_height) {
+        CBlockIndex* cursor = chainActive[cursor_height];
+        if (cursor == NULL)
+            return 0;
+        int64_t time = cursor->GetBlockTime();
         minTime = std::min(time, minTime);
         maxTime = std::max(time, maxTime);
     }
@@ -127,6 +132,9 @@ UniValue generateBlocks(std::shared_ptr<CReserveScript> coinbaseScript, int nGen
         }
         const Consensus::Params& consensus = Params().GetConsensus(nHeight);
         const bool fShadowForkInstantMining = consensus.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true);
+        if (nMineAuxPow) {
+            CAuxPow::initAuxPow(*pblock);
+        }
         if (fShadowForkInstantMining) {
             LogPrintf("generateBlocks: shadow fork instant mining enabled; skipping local proof-of-work search\n");
         } else if (!nMineAuxPow) {
@@ -135,7 +143,6 @@ UniValue generateBlocks(std::shared_ptr<CReserveScript> coinbaseScript, int nGen
                 --nMaxTries;
             }
         } else {
-            CAuxPow::initAuxPow(*pblock);
             CPureBlockHeader& miningHeader = pblock->auxpow->parentBlock;
             while (nMaxTries > 0 && miningHeader.nNonce < nInnerLoopCount && !CheckProofOfWork(miningHeader.GetPoWHash(), pblock->nBits, consensus)) {
                 ++miningHeader.nNonce;

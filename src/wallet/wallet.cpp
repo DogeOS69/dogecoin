@@ -3812,8 +3812,12 @@ CWallet* CWallet::CreateWalletFromFile(const std::string walletFile)
         if (fPruneMode)
         {
             CBlockIndex *block = chainActive.Tip();
-            while (block && block->pprev && (block->pprev->nStatus & BLOCK_HAVE_DATA) && block->pprev->nTx > 0 && pindexRescan != block)
-                block = block->pprev;
+            while (block && block->nHeight > 0 && pindexRescan != block) {
+                CBlockIndex* prev = chainActive[block->nHeight - 1];
+                if (prev == NULL || !(prev->nStatus & BLOCK_HAVE_DATA) || prev->nTx <= 0)
+                    break;
+                block = prev;
+            }
 
             if (pindexRescan != block) {
                 InitError(_("Prune: last wallet synchronisation goes beyond pruned data. You need to -reindex (download the whole blockchain again in case of pruned node)"));
