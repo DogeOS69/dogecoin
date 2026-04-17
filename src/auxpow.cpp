@@ -49,11 +49,8 @@ int CMerkleTx::GetDepthInMainChain(const CBlockIndex* &pindexRet) const
 
     AssertLockHeld(cs_main);
 
-    // Find the block it claims to be in
-    BlockMap::iterator mi = mapBlockIndex.find(hashBlock);
-    if (mi == mapBlockIndex.end())
-        return 0;
-    CBlockIndex* pindex = (*mi).second;
+    // Find the block it claims to be in.
+    CBlockIndex* pindex = LookupBlockIndex(hashBlock);
     if (!pindex || !chainActive.Contains(pindex))
         return 0;
 
