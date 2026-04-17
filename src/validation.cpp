@@ -3818,6 +3818,17 @@ static int GetShadowForkSnapshotWindowSize()
     return std::max(1, configured);
 }
 
+static int GetShadowForkActiveChainSegmentStart(int height)
+{
+    int start = std::max(0, height - SHADOWFORK_LAZY_ACTIVE_CHAIN_CHUNK + 1);
+    if (height >= g_shadowfork_lazy_block_index.eager_base_height) {
+        start = std::max(start, g_shadowfork_lazy_block_index.eager_base_height);
+    }
+    return start;
+}
+
+static bool TryLoadShadowForkActiveChainSegment(int height, bool fShadowForkFastCandidates);
+
 static bool GetShadowForkActiveChainRecordAtHeight(int height, ShadowForkActiveChainRecord* record, std::string* error)
 {
     if (!g_shadowfork_lazy_block_index.enabled) {
@@ -3920,6 +3931,36 @@ static bool PopulateShadowForkDiskIndexEntry(const CDiskBlockIndex& diskindex, C
     return true;
 }
 
+static bool EnsureShadowForkActiveChainParentLoaded(CBlockIndex* pindex, bool fShadowForkFastCandidates)
+{
+    if (!g_shadowfork_lazy_block_index.enabled || pindex == NULL || pindex->nHeight <= 0 || pindex->pprev != NULL) {
+        return true;
+    }
+
+    if (!TryLoadShadowForkActiveChainSegment(pindex->nHeight - 1, fShadowForkFastCandidates)) {
+        return false;
+    }
+
+    std::string snapshot_error;
+    ShadowForkActiveChainRecord prev_record;
+    if (!GetShadowForkActiveChainRecordAtHeight(pindex->nHeight - 1, &prev_record, &snapshot_error)) {
+        LogPrintf("EnsureShadowForkActiveChainParentLoaded(): failed to read snapshot height %d: %s\n",
+            pindex->nHeight - 1, snapshot_error);
+        return false;
+    }
+
+    BlockMap::iterator prev_it = mapBlockIndex.find(prev_record.block_hash);
+    if (prev_it == mapBlockIndex.end()) {
+        LogPrintf("EnsureShadowForkActiveChainParentLoaded(): previous active-chain block %s missing at height %d\n",
+            prev_record.block_hash.ToString(), pindex->nHeight - 1);
+        return false;
+    }
+
+    pindex->pprev = prev_it->second;
+    pindex->BuildSkip();
+    return true;
+}
+
 static bool TryLoadShadowForkActiveChainSegment(int height, bool fShadowForkFastCandidates)
 {
     AssertLockHeld(cs_main);
@@ -3937,12 +3978,15 @@ static bool TryLoadShadowForkActiveChainSegment(int height, bool fShadowForkFast
 
     BlockMap::iterator existing_tip = mapBlockIndex.find(height_record.block_hash);
     if (existing_tip != mapBlockIndex.end()) {
+        if (!EnsureShadowForkActiveChainParentLoaded(existing_tip->second, fShadowForkFastCandidates)) {
+            return false;
+        }
         return true;
     }
 
-    int start = height;
+    const int start = GetShadowForkActiveChainSegmentStart(height);
     CBlockIndex* pprev = NULL;
-    while (start > 0) {
+    if (start > 0) {
         ShadowForkActiveChainRecord prev_record;
         if (!GetShadowForkActiveChainRecordAtHeight(start - 1, &prev_record, &snapshot_error)) {
             LogPrintf("TryLoadShadowForkActiveChainSegment(): failed to read snapshot height %d: %s\n", start - 1, snapshot_error);
@@ -3952,10 +3996,7 @@ static bool TryLoadShadowForkActiveChainSegment(int height, bool fShadowForkFast
         BlockMap::iterator prev_it = mapBlockIndex.find(prev_record.block_hash);
         if (prev_it != mapBlockIndex.end()) {
             pprev = prev_it->second;
-            break;
         }
-
-        --start;
     }
 
     for (int cursor = start; cursor <= height; ++cursor) {
@@ -3967,6 +4008,9 @@ static bool TryLoadShadowForkActiveChainSegment(int height, bool fShadowForkFast
 
         BlockMap::iterator it = mapBlockIndex.find(record.block_hash);
         if (it != mapBlockIndex.end()) {
+            if (!EnsureShadowForkActiveChainParentLoaded(it->second, fShadowForkFastCandidates)) {
+                return false;
+            }
             pprev = it->second;
             continue;
         }
@@ -3998,7 +4042,13 @@ CBlockIndex* LoadShadowForkActiveChainIndex(int nHeight)
         return NULL;
     }
     BlockMap::iterator it = mapBlockIndex.find(record.block_hash);
-    return it == mapBlockIndex.end() ? NULL : it->second;
+    if (it == mapBlockIndex.end()) {
+        return NULL;
+    }
+    if (!EnsureShadowForkActiveChainParentLoaded(it->second, true)) {
+        return NULL;
+    }
+    return it->second;
 }
 
 CBlockIndex* LookupBlockIndex(const uint256& hash)
