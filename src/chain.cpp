@@ -44,10 +44,17 @@ void CChain::SetTip(CBlockIndex *pindex) {
         nBaseHeight = 0;
         return;
     }
-    nBaseHeight = 0;
-    vChain.resize(pindex->nHeight + 1);
-    while (pindex && vChain[pindex->nHeight] != pindex) {
-        vChain[pindex->nHeight] = pindex;
+
+    if (vChain.empty()) {
+        nBaseHeight = 0;
+    } else if (nBaseHeight > pindex->nHeight) {
+        nBaseHeight = pindex->nHeight;
+    }
+
+    vChain.resize(pindex->nHeight - nBaseHeight + 1);
+    while (pindex && pindex->nHeight >= nBaseHeight &&
+           vChain[pindex->nHeight - nBaseHeight] != pindex) {
+        vChain[pindex->nHeight - nBaseHeight] = pindex;
         pindex = pindex->pprev;
     }
 }
