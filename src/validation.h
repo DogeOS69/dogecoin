@@ -271,6 +271,8 @@ bool LoadExternalBlockFile(const CChainParams& chainparams, FILE* fileIn, CDiskB
 bool InitBlockIndex(const CChainParams& chainparams);
 /** Load the block tree and coins database from disk */
 bool LoadBlockIndex(const CChainParams& chainparams);
+/** Build or refresh the global shadowfork block-index snapshot from the current source datadir. */
+bool BuildShadowForkBlockIndexSnapshot(const CChainParams& chainparams);
 /** Unload database information */
 void UnloadBlockIndex();
 /** Run an instance of the script checking thread */
@@ -325,6 +327,8 @@ void UnlinkPrunedFiles(const std::set<int>& setFilesToPrune);
 
 /** Create a new block index entry for a given block hash */
 CBlockIndex * InsertBlockIndex(uint256 hash);
+/** Return a loaded block index entry, lazily materializing active-chain entries in shadowfork mode when needed. */
+CBlockIndex* LookupBlockIndex(const uint256& hash);
 /** Flush all state, indexes and buffers to disk. */
 void FlushStateToDisk();
 /** Prune block files and flush state to disk. */

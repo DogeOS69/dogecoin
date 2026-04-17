@@ -911,7 +911,7 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFlushOnClose)
         wtx.nTimeSmart = wtx.nTimeReceived;
         if (!wtxIn.hashUnset())
         {
-            if (mapBlockIndex.count(wtxIn.hashBlock))
+            if (LookupBlockIndex(wtxIn.hashBlock))
             {
                 int64_t latestNow = wtx.nTimeReceived;
                 int64_t latestEntry = 0;
@@ -944,8 +944,11 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFlushOnClose)
                     }
                 }
 
-                int64_t blocktime = mapBlockIndex[wtxIn.hashBlock]->GetBlockTime();
-                wtx.nTimeSmart = std::max(latestEntry, std::min(blocktime, latestNow));
+                CBlockIndex* pindex = LookupBlockIndex(wtxIn.hashBlock);
+                if (pindex) {
+                    int64_t blocktime = pindex->GetBlockTime();
+                    wtx.nTimeSmart = std::max(latestEntry, std::min(blocktime, latestNow));
+                }
             }
             else
                 LogPrintf("AddToWallet(): found %s in block %s not in index\n",
@@ -1001,7 +1004,8 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFlushOnClose)
 
     if ( !strCmd.empty())
     {
-        int64_t nHeight = wtxIn.hashUnset() ? 0 : mapBlockIndex[wtxIn.hashBlock]->nHeight;
+        CBlockIndex* pindex = wtxIn.hashUnset() ? NULL : LookupBlockIndex(wtxIn.hashBlock);
+        int64_t nHeight = pindex ? pindex->nHeight : 0;
         boost::replace_all(strCmd, "%s", wtxIn.GetHash().GetHex());
         boost::replace_all(strCmd, "%i", boost::lexical_cast<std::string>(nHeight));
         boost::thread t(runCommand, strCmd); // thread runs free
@@ -1140,11 +1144,9 @@ void CWallet::MarkConflicted(const uint256& hashBlock, const uint256& hashTx)
     LOCK2(cs_main, cs_wallet);
 
     int conflictconfirms = 0;
-    if (mapBlockIndex.count(hashBlock)) {
-        CBlockIndex* pindex = mapBlockIndex[hashBlock];
-        if (chainActive.Contains(pindex)) {
-            conflictconfirms = -(chainActive.Height() - pindex->nHeight + 1);
-        }
+    CBlockIndex* pindex = LookupBlockIndex(hashBlock);
+    if (pindex && chainActive.Contains(pindex)) {
+        conflictconfirms = -(chainActive.Height() - pindex->nHeight + 1);
     }
     // If number of conflict confirms cannot be determined, this means
     // that the block is still unknown or not yet part of the main chain,
@@ -3577,10 +3579,10 @@ void CWallet::GetKeyBirthTimes(std::map<CTxDestination, int64_t> &mapKeyBirth) c
     for (std::map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); it++) {
         // iterate over all wallet transactions...
         const CWalletTx &wtx = (*it).second;
-        BlockMap::const_iterator blit = mapBlockIndex.find(wtx.hashBlock);
-        if (blit != mapBlockIndex.end() && chainActive.Contains(blit->second)) {
+        CBlockIndex* pindex = LookupBlockIndex(wtx.hashBlock);
+        if (pindex && chainActive.Contains(pindex)) {
             // ... which are already in a block
-            int nHeight = blit->second->nHeight;
+            int nHeight = pindex->nHeight;
             BOOST_FOREACH(const CTxOut &txout, wtx.tx->vout) {
                 // iterate over all their outputs
                 CAffectedKeysVisitor(*this, vAffected).Process(txout.scriptPubKey);
@@ -3588,7 +3590,7 @@ void CWallet::GetKeyBirthTimes(std::map<CTxDestination, int64_t> &mapKeyBirth) c
                     // ... and all their affected keys
                     std::map<CKeyID, CBlockIndex*>::iterator rit = mapKeyFirstBlock.find(keyid);
                     if (rit != mapKeyFirstBlock.end() && nHeight < rit->second->nHeight)
-                        rit->second = blit->second;
+                        rit->second = pindex;
                 }
                 vAffected.clear();
             }

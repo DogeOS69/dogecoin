@@ -474,6 +474,7 @@ std::string HelpMessage(HelpMessageMode mode)
 
     if (showDebug) {
         strUsage += HelpMessageGroup(_("Shadow fork options (dev/testing):"));
+        strUsage += HelpMessageOpt("-buildshadowforksnapshot", _("Build or refresh the global shadow fork block-index snapshot from the current source datadir and exit"));
         strUsage += HelpMessageOpt("-shadowfork=<height>", _("Enable shadow fork mode, forking from the specified block height"));
         strUsage += HelpMessageOpt("-shadowforkchain=<chain>", _("Source chain to fork from: main or test (default: main)"));
         strUsage += HelpMessageOpt("-shadowforkmaturity=<n>", strprintf(_("Coinbase maturity for shadow fork (default: %d)"), 1));
@@ -483,6 +484,9 @@ std::string HelpMessage(HelpMessageMode mode)
         strUsage += HelpMessageOpt("-shadowforkskiprewind", _("In shadow fork mode, skip startup block-index rewind (default: 1)"));
         strUsage += HelpMessageOpt("-shadowforksuppressibdlogs", _("In shadow fork mode, suppress per-block UpdateTip logs during initial block download (default: 1)"));
         strUsage += HelpMessageOpt("-shadowforkskipversionbitswarnings", _("In shadow fork mode, skip UpdateTip versionbits and unexpected-version warning scans on the inherited block index (default: 1)"));
+        strUsage += HelpMessageOpt("-shadowforkusesnapshot", _("Use the global shadow fork block-index snapshot during shadow fork startup when available (default: 1)"));
+        strUsage += HelpMessageOpt("-shadowforksnapshotroot=<dir>", _("Root directory for shared shadow fork snapshots; defaults to the nearest ancestor shadow-snapshots directory or <datadir>/shadow-snapshots"));
+        strUsage += HelpMessageOpt("-shadowforksnapshotwindow=<n>", _("Eagerly load the newest <n> active-chain block-index entries from the snapshot at startup, lazily loading older active-chain entries on demand (default: 8192)"));
     }
 
     strUsage += HelpMessageGroup(_("Node relay options:"));
@@ -907,6 +911,23 @@ bool AppInitParameterInteraction()
     // ********************************************************* Step 2: parameter interactions
 
     // also see: InitParameterInteraction()
+
+    if (GetBoolArg("-buildshadowforksnapshot", false)) {
+        if (chainparams.GetConsensus(0).fShadowForkMode) {
+            return InitError(_("Shadow fork snapshots must be built from a source main/test datadir, not from a shadow fork datadir."));
+        }
+
+        const std::string network_id = chainparams.NetworkIDString();
+        if (network_id != "main" && network_id != "test") {
+            return InitError(_("Shadow fork snapshots can only be built from main or test source datadirs."));
+        }
+
+        if (GetBoolArg("-reindex", false) || GetBoolArg("-reindex-chainstate", false)) {
+            return InitError(_("Shadow fork snapshot build is incompatible with -reindex and -reindex-chainstate."));
+        }
+
+        LogPrintf("Shadow fork snapshot build requested for source chain %s\n", network_id);
+    }
 
     // Shadow fork parameter validation
     if (IsArgSet("-shadowfork")) {
@@ -1635,6 +1656,16 @@ bool AppInitMain(boost::thread_group& threadGroup, CScheduler& scheduler)
         return false;
     }
     LogPrintf(" block index %15dms\n", GetTimeMillis() - nStart);
+
+    if (GetBoolArg("-buildshadowforksnapshot", false))
+    {
+        uiInterface.InitMessage(_("Building shadow fork snapshot..."));
+        if (!BuildShadowForkBlockIndexSnapshot(chainparams))
+            return false;
+        LogPrintf("Shadow fork snapshot built successfully. Shutting down.\n");
+        StartShutdown();
+        return true;
+    }
 
     fs::path est_path = GetDataDir() / FEE_ESTIMATES_FILENAME;
     CAutoFile est_filein(fsbridge::fopen(est_path, "rb"), SER_DISK, CLIENT_VERSION);

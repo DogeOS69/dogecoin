@@ -138,6 +138,7 @@ BITCOIN_CORE_H = \
   rpc/server.h \
   rpc/register.h \
   scheduler.h \
+  shadowfork_snapshot.h \
   script/sigcache.h \
   script/sign.h \
   script/standard.h \
@@ -218,6 +219,7 @@ libdogecoin_server_a_SOURCES = \
   rpc/net.cpp \
   rpc/rawtransaction.cpp \
   rpc/server.cpp \
+  shadowfork_snapshot.cpp \
   script/sigcache.cpp \
   script/ismine.cpp \
   timedata.cpp \

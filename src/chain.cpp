@@ -41,11 +41,29 @@ CBlockHeader CBlockIndex::GetBlockHeader(const Consensus::Params& consensusParam
 void CChain::SetTip(CBlockIndex *pindex) {
     if (pindex == NULL) {
         vChain.clear();
+        nBaseHeight = 0;
         return;
     }
+    nBaseHeight = 0;
     vChain.resize(pindex->nHeight + 1);
     while (pindex && vChain[pindex->nHeight] != pindex) {
         vChain[pindex->nHeight] = pindex;
+        pindex = pindex->pprev;
+    }
+}
+
+void CChain::SetTipWindow(CBlockIndex *pindex, int nWindowStartHeight) {
+    if (pindex == NULL) {
+        vChain.clear();
+        nBaseHeight = 0;
+        return;
+    }
+
+    nBaseHeight = std::max(0, std::min(nWindowStartHeight, pindex->nHeight));
+    vChain.resize(pindex->nHeight - nBaseHeight + 1);
+    while (pindex && pindex->nHeight >= nBaseHeight &&
+           vChain[pindex->nHeight - nBaseHeight] != pindex) {
+        vChain[pindex->nHeight - nBaseHeight] = pindex;
         pindex = pindex->pprev;
     }
 }
@@ -91,9 +109,27 @@ const CBlockIndex *CChain::FindFork(const CBlockIndex *pindex) const {
 
 CBlockIndex* CChain::FindEarliestAtLeast(int64_t nTime) const
 {
-    std::vector<CBlockIndex*>::const_iterator lower = std::lower_bound(vChain.begin(), vChain.end(), nTime,
-        [](CBlockIndex* pBlock, const int64_t& time) -> bool { return pBlock->GetBlockTimeMax() < time; });
-    return (lower == vChain.end() ? NULL : *lower);
+    if (vChain.empty()) {
+        return NULL;
+    }
+
+    int low = 0;
+    int high = Height();
+    CBlockIndex* result = NULL;
+    while (low <= high) {
+        const int mid = low + (high - low) / 2;
+        CBlockIndex* pBlock = (*this)[mid];
+        if (pBlock == NULL) {
+            return result;
+        }
+        if (pBlock->GetBlockTimeMax() < nTime) {
+            low = mid + 1;
+        } else {
+            result = pBlock;
+            high = mid - 1;
+        }
+    }
+    return result;
 }
 
 /** Turn the lowest '1' bit in the binary representation of a number into a '0'. */
@@ -128,6 +164,9 @@ CBlockIndex* CBlockIndex::GetAncestor(int height)
             pindexWalk = pindexWalk->pskip;
             heightWalk = heightSkip;
         } else {
+            if (pindexWalk->pprev == NULL) {
+                pindexWalk->pprev = LoadShadowForkActiveChainIndex(heightWalk - 1);
+            }
             assert(pindexWalk->pprev);
             pindexWalk = pindexWalk->pprev;
             heightWalk--;
