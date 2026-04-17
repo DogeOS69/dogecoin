@@ -3883,6 +3883,43 @@ static bool PopulateShadowForkActiveChainEntry(int height, const ShadowForkActiv
     return true;
 }
 
+static bool PopulateShadowForkDiskIndexEntry(const CDiskBlockIndex& diskindex, CBlockIndex* pprev, bool fShadowForkFastCandidates, CBlockIndex** ppindex)
+{
+    const uint256 block_hash = diskindex.GetBlockHash();
+    if (block_hash.IsNull()) {
+        LogPrintf("PopulateShadowForkDiskIndexEntry(): null block hash at height %d\n", diskindex.nHeight);
+        return false;
+    }
+    if ((diskindex.nHeight == 0 && !diskindex.hashPrev.IsNull()) ||
+        (diskindex.nHeight > 0 &&
+         (pprev == NULL || diskindex.hashPrev != pprev->GetBlockHash()))) {
+        LogPrintf("PopulateShadowForkDiskIndexEntry(): parent mismatch for %s at height %d\n",
+            block_hash.ToString(), diskindex.nHeight);
+        return false;
+    }
+
+    CBlockIndex* pindex = InsertBlockIndex(block_hash);
+    pindex->pprev = pprev;
+    pindex->nHeight = diskindex.nHeight;
+    pindex->nFile = diskindex.nFile;
+    pindex->nDataPos = diskindex.nDataPos;
+    pindex->nUndoPos = diskindex.nUndoPos;
+    pindex->nVersion = diskindex.nVersion;
+    pindex->hashMerkleRoot = diskindex.hashMerkleRoot;
+    pindex->nTime = diskindex.nTime;
+    pindex->nBits = diskindex.nBits;
+    pindex->nNonce = diskindex.nNonce;
+    pindex->nStatus = diskindex.nStatus;
+    pindex->nTx = diskindex.nTx;
+    pindex->nChainWork = diskindex.nChainWork;
+    pindex->nChainTx = diskindex.nChainTx;
+    pindex->nTimeMax = diskindex.nTimeMax;
+
+    TrackLoadedBlockIndexEntry(pindex, fShadowForkFastCandidates, false);
+    *ppindex = pindex;
+    return true;
+}
+
 static bool TryLoadShadowForkActiveChainSegment(int height, bool fShadowForkFastCandidates)
 {
     AssertLockHeld(cs_main);
@@ -3983,18 +4020,29 @@ CBlockIndex* LookupBlockIndex(const uint256& hash)
 
     ShadowForkActiveChainRecord record;
     std::string snapshot_error;
-    if (!GetShadowForkActiveChainRecordAtHeight(diskindex.nHeight, &record, &snapshot_error)) {
-        return NULL;
-    }
-    if (record.block_hash != hash) {
-        return NULL;
-    }
-    if (!TryLoadShadowForkActiveChainSegment(diskindex.nHeight, true)) {
-        return NULL;
+    if (GetShadowForkActiveChainRecordAtHeight(diskindex.nHeight, &record, &snapshot_error) &&
+        record.block_hash == hash) {
+        if (!TryLoadShadowForkActiveChainSegment(diskindex.nHeight, true)) {
+            return NULL;
+        }
+
+        it = mapBlockIndex.find(hash);
+        return it == mapBlockIndex.end() ? NULL : it->second;
     }
 
-    it = mapBlockIndex.find(hash);
-    return it == mapBlockIndex.end() ? NULL : it->second;
+    CBlockIndex* pprev = NULL;
+    if (!diskindex.hashPrev.IsNull()) {
+        pprev = LookupBlockIndex(diskindex.hashPrev);
+        if (pprev == NULL) {
+            return NULL;
+        }
+    }
+
+    CBlockIndex* pindex = NULL;
+    if (!PopulateShadowForkDiskIndexEntry(diskindex, pprev, false, &pindex)) {
+        return NULL;
+    }
+    return pindex;
 }
 
 static bool TryLoadShadowForkSnapshot(const CChainParams& chainparams)
