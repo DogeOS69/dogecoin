@@ -137,8 +137,9 @@ UniValue blockheaderToJSON(const CBlockIndex* blockindex)
     result.pushKV("difficulty", GetDifficulty(blockindex));
     result.pushKV("chainwork", blockindex->nChainWork.GetHex());
 
+    const bool on_active_chain = chainActive.Contains(blockindex);
     const CBlockIndex* pprev = blockindex->pprev;
-    if (pprev == NULL && blockindex->nHeight > 0) {
+    if (pprev == NULL && on_active_chain && blockindex->nHeight > 0) {
         pprev = chainActive[blockindex->nHeight - 1];
     }
     if (pprev)

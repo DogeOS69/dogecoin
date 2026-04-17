@@ -3918,9 +3918,6 @@ static bool TryLoadShadowForkActiveChainSegment(int height, bool fShadowForkFast
             break;
         }
 
-        if (height - start + 1 >= SHADOWFORK_LAZY_ACTIVE_CHAIN_CHUNK) {
-            break;
-        }
         --start;
     }
 
