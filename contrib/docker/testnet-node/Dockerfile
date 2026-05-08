@@ -16,13 +16,18 @@ FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_MIRROR=
 
 # Install build dependencies
 # Note: libboost-all-dev ensures complete Boost installation with all linking deps
 RUN if [ -n "$UBUNTU_APT_MIRROR" ]; then \
         sed -i "s|http://archive.ubuntu.com/ubuntu|$UBUNTU_APT_MIRROR|g" /etc/apt/sources.list; \
     fi \
-    && apt-get update && apt-get install -y --no-install-recommends \
+    && if [ -n "$UBUNTU_SECURITY_MIRROR" ]; then \
+        sed -i "s|http://security.ubuntu.com/ubuntu|$UBUNTU_SECURITY_MIRROR|g" /etc/apt/sources.list; \
+    fi \
+    && sed -i '/jammy-backports/d' /etc/apt/sources.list \
+    && apt-get -o Acquire::ForceIPv4=true update && apt-get install -y --no-install-recommends \
     build-essential \
     libtool \
     autotools-dev \
@@ -41,6 +46,22 @@ RUN if [ -n "$UBUNTU_APT_MIRROR" ]; then \
 # Copy source code
 WORKDIR /dogecoin
 COPY . .
+
+# Worktrees checked out from Windows can carry CRLF endings. Normalize only
+# build-control text files inside the image so shell/autotools scripts execute.
+RUN find . -type f \( \
+        -name '*.sh' -o \
+        -name '*.ac' -o \
+        -name '*.am' -o \
+        -name '*.m4' -o \
+        -name '*.mk' -o \
+        -name '*.in' -o \
+        -name 'Makefile*' -o \
+        -path './build-aux/*' -o \
+        -path './depends/config.*' -o \
+        -path './src/secp256k1/build-aux/*' -o \
+        -path './src/univalue/build-aux/*' \
+    \) -exec sed -i 's/\r$//' {} +
 
 ARG STRIP_BINARIES=1
 
@@ -95,7 +116,7 @@ COPY --from=builder /dogecoin/src/dogecoin-cli /usr/local/bin/
 
 # Copy entrypoint script (make world-readable and executable)
 COPY contrib/docker/testnet-node/scripts/entrypoint.sh /entrypoint.sh
-RUN chmod 755 /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod 755 /entrypoint.sh
 
 # Default environment
 ENV DOGECOIN_DATA=/data

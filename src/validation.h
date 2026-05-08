@@ -273,6 +273,8 @@ bool InitBlockIndex(const CChainParams& chainparams);
 bool LoadBlockIndex(const CChainParams& chainparams);
 /** Build or refresh the global shadowfork block-index snapshot from the current source datadir. */
 bool BuildShadowForkBlockIndexSnapshot(const CChainParams& chainparams);
+/** In shadowfork mode, cut the active chain to -shadowfork=<height> after startup verification. */
+bool ApplyShadowForkStartupCut(const CChainParams& chainparams);
 /** Unload database information */
 void UnloadBlockIndex();
 /** Run an instance of the script checking thread */

@@ -31,6 +31,7 @@
 #include "utilmoneystr.h"
 
 #include <assert.h>
+#include <memory>
 
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/lexical_cast.hpp>
@@ -49,6 +50,12 @@ bool fWalletRbf = DEFAULT_WALLET_RBF;
 const char * DEFAULT_WALLET_DAT = "wallet.dat";
 const uint32_t BIP32_HARDENED_KEY_LIMIT = 0x80000000;
 const uint32_t BIP44_COIN_TYPE = 3;
+
+static bool IsShadowForkMemoryOnlyWallet()
+{
+    return Params().GetConsensus(0).fShadowForkMode &&
+        GetBoolArg("-shadowforkskipwalletrescan", true);
+}
 
 /**
  * Fees smaller than this (in satoshi) are considered zero fee (for transaction creation)
@@ -272,6 +279,11 @@ bool CWallet::AddWatchOnly(const CScript& dest)
     const CKeyMetadata& meta = mapKeyMetadata[CScriptID(dest)];
     UpdateTimeFirstKey(meta.nCreateTime);
     NotifyWatchonlyChanged(true);
+    if (IsShadowForkMemoryOnlyWallet()) {
+        LogPrintf("%s: shadow fork mode: added watch-only script in memory without wallet DB write\n",
+            __func__);
+        return true;
+    }
     if (!fFileBacked)
         return true;
     return CWalletDB(strWalletFile).WriteWatchOnly(dest, meta);
@@ -771,6 +783,8 @@ int64_t CWallet::IncOrderPosNext(CWalletDB *pwalletdb)
 {
     AssertLockHeld(cs_wallet); // nOrderPosNext
     int64_t nRet = nOrderPosNext++;
+    if (IsShadowForkMemoryOnlyWallet())
+        return nRet;
     if (pwalletdb) {
         pwalletdb->WriteOrderPosNext(nOrderPosNext);
     } else {
@@ -893,7 +907,10 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFlushOnClose)
 {
     LOCK(cs_wallet);
 
-    CWalletDB walletdb(strWalletFile, "r+", fFlushOnClose);
+    const bool fMemoryOnly = IsShadowForkMemoryOnlyWallet();
+    std::unique_ptr<CWalletDB> walletdb;
+    if (!fMemoryOnly)
+        walletdb.reset(new CWalletDB(strWalletFile, "r+", fFlushOnClose));
 
     uint256 hash = wtxIn.GetHash();
 
@@ -905,7 +922,7 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFlushOnClose)
     if (fInsertedNew)
     {
         wtx.nTimeReceived = GetAdjustedTime();
-        wtx.nOrderPos = IncOrderPosNext(&walletdb);
+        wtx.nOrderPos = IncOrderPosNext(walletdb.get());
         wtxOrdered.insert(make_pair(wtx.nOrderPos, TxPair(&wtx, (CAccountingEntry*)0)));
 
         wtx.nTimeSmart = wtx.nTimeReceived;
@@ -989,9 +1006,14 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFlushOnClose)
     LogPrintf("AddToWallet %s  %s%s\n", wtxIn.GetHash().ToString(), (fInsertedNew ? "new" : ""), (fUpdated ? "update" : ""));
 
     // Write to disk
-    if (fInsertedNew || fUpdated)
-        if (!walletdb.WriteTx(wtx))
+    if (fInsertedNew || fUpdated) {
+        if (fMemoryOnly) {
+            LogPrintf("%s: shadow fork mode: retained wallet tx in memory without wallet DB write\n",
+                __func__);
+        } else if (!walletdb->WriteTx(wtx)) {
             return false;
+        }
+    }
 
     // Break debit/credit balance caches:
     wtx.MarkDirty();
@@ -1016,6 +1038,16 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFlushOnClose)
 
 bool CWallet::LoadToWallet(const CWalletTx& wtxIn)
 {
+    if (IsShadowForkMemoryOnlyWallet()) {
+        static unsigned int nSkippedHistoricalShadowForkWalletTx = 0;
+        if (nSkippedHistoricalShadowForkWalletTx == 0) {
+            LogPrintf("%s: shadow fork mode: skipping historical wallet transactions from wallet DB\n",
+                __func__);
+        }
+        ++nSkippedHistoricalShadowForkWalletTx;
+        return true;
+    }
+
     uint256 hash = wtxIn.GetHash();
 
     mapWallet[hash] = wtxIn;
@@ -1535,6 +1567,14 @@ CBlockIndex* CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool f
     CBlockIndex* pindex = pindexStart;
     {
         LOCK2(cs_main, cs_wallet);
+
+        if (IsShadowForkMemoryOnlyWallet()) {
+            LogPrintf("%s: shadow fork mode: skipped wallet rescan from height=%d tip=%d\n",
+                __func__,
+                pindex ? pindex->nHeight : -1,
+                chainActive.Tip() ? chainActive.Tip()->nHeight : -1);
+            return chainActive.Tip();
+        }
 
         // no need to read and scan block, if block was created before
         // our wallet birthday (as adjusted for block time variability)
@@ -3038,6 +3078,11 @@ bool CWallet::SetAddressBook(const CTxDestination& address, const string& strNam
     }
     NotifyAddressBookChanged(this, address, strName, ::IsMine(*this, address) != ISMINE_NO,
                              strPurpose, (fUpdated ? CT_UPDATED : CT_NEW) );
+    if (IsShadowForkMemoryOnlyWallet()) {
+        LogPrintf("%s: shadow fork mode: updated address book in memory without wallet DB write for %s\n",
+            __func__, CBitcoinAddress(address).ToString());
+        return true;
+    }
     if (!fFileBacked)
         return false;
     if (!strPurpose.empty() && !CWalletDB(strWalletFile).WritePurpose(CBitcoinAddress(address).ToString(), strPurpose))
@@ -3685,6 +3730,15 @@ std::string CWallet::GetWalletHelpString(bool showDebug)
     return strUsage;
 }
 
+static CBlockLocator GetWalletBestChainLocator()
+{
+    if (IsShadowForkMemoryOnlyWallet() && chainActive.Tip() != NULL) {
+        return CBlockLocator(std::vector<uint256>(1, chainActive.Tip()->GetBlockHash()));
+    }
+
+    return chainActive.GetLocator();
+}
+
 CWallet* CWallet::CreateWalletFromFile(const std::string walletFile)
 {
     // needed to restore wallet transaction meta data after -zapwallettxes
@@ -3774,7 +3828,7 @@ CWallet* CWallet::CreateWalletFromFile(const std::string walletFile)
             }
         }
 
-        walletInstance->SetBestChain(chainActive.GetLocator());
+        walletInstance->SetBestChain(GetWalletBestChainLocator());
     }
     else if (IsArgSet("-usehd")) {
         bool useHD = GetBoolArg("-usehd", DEFAULT_USE_HD_WALLET);
@@ -3799,10 +3853,18 @@ CWallet* CWallet::CreateWalletFromFile(const std::string walletFile)
     {
         CWalletDB walletdb(walletFile);
         CBlockLocator locator;
-        if (walletdb.ReadBestBlock(locator))
+        if (walletdb.ReadBestBlock(locator)) {
             pindexRescan = FindForkInGlobalIndex(chainActive, locator);
-        else
+            if (IsShadowForkMemoryOnlyWallet() && pindexRescan != chainActive.Tip()) {
+                LogPrintf("Shadow fork wallet rescan skipped: wallet best fork height=%d, active tip height=%d\n",
+                    pindexRescan ? pindexRescan->nHeight : -1,
+                    chainActive.Tip() ? chainActive.Tip()->nHeight : -1);
+                pindexRescan = chainActive.Tip();
+                walletInstance->SetBestChain(GetWalletBestChainLocator());
+            }
+        } else {
             pindexRescan = chainActive.Genesis();
+        }
     }
     if (chainActive.Tip() && chainActive.Tip() != pindexRescan)
     {

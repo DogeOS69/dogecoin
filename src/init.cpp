@@ -487,6 +487,8 @@ std::string HelpMessage(HelpMessageMode mode)
         strUsage += HelpMessageOpt("-shadowforkusesnapshot", _("Use the global shadow fork block-index snapshot during shadow fork startup when available (default: 1)"));
         strUsage += HelpMessageOpt("-shadowforksnapshotroot=<dir>", _("Root directory for shared shadow fork snapshots; defaults to the nearest ancestor shadow-snapshots directory or <datadir>/shadow-snapshots"));
         strUsage += HelpMessageOpt("-shadowforksnapshotwindow=<n>", _("Eagerly load the newest <n> active-chain block-index entries from the snapshot at startup, lazily loading older active-chain entries on demand (default: 8192)"));
+        strUsage += HelpMessageOpt("-shadowforkstartupcut", _("In shadow fork mode, cut the active chain to -shadowfork=<height> during startup instead of requiring external invalidateblock rollback (default: 1)"));
+        strUsage += HelpMessageOpt("-shadowforkskipwalletrescan", _("In shadow fork mode, trust the startup-cut tip and skip stale inherited wallet rescans (default: 1)"));
     }
 
     strUsage += HelpMessageGroup(_("Node relay options:"));
@@ -1613,9 +1615,21 @@ bool AppInitMain(boost::thread_group& threadGroup, CScheduler& scheduler)
                     }
                 }
 
-                if (!CVerifyDB().VerifyDB(chainparams, pcoinsdbview, GetArg("-checklevel", DEFAULT_CHECKLEVEL),
-                              GetArg("-checkblocks", DEFAULT_CHECKBLOCKS))) {
-                    strLoadError = _("Corrupted block database detected");
+                if (chainparams.GetConsensus(0).fShadowForkMode &&
+                    GetBoolArg("-shadowforkstartupcut", true) &&
+                    IsArgSet("-shadowfork")) {
+                    LogPrintf("VerifyDB: skipped before shadow fork startup cut\n");
+                } else {
+                    if (!CVerifyDB().VerifyDB(chainparams, pcoinsdbview, GetArg("-checklevel", DEFAULT_CHECKLEVEL),
+                                  GetArg("-checkblocks", DEFAULT_CHECKBLOCKS))) {
+                        strLoadError = _("Corrupted block database detected");
+                        break;
+                    }
+                }
+
+                uiInterface.InitMessage(_("Applying shadow fork height..."));
+                if (!ApplyShadowForkStartupCut(chainparams)) {
+                    strLoadError = _("Unable to apply requested shadow fork height");
                     break;
                 }
             } catch (const std::exception& e) {
