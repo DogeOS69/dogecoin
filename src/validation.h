@@ -334,6 +334,8 @@ CBlockIndex * InsertBlockIndex(uint256 hash);
 CBlockIndex* FindLoadedBlockIndex(const uint256& hash);
 /** Return a loaded block index entry, lazily materializing active-chain entries in shadowfork mode when needed. */
 CBlockIndex* LookupBlockIndex(const uint256& hash);
+/** True when a height is below the intentionally loaded shadowfork startup-cut active-chain window. */
+bool IsBelowShadowForkStartupCutWindow(int height);
 /** Flush all state, indexes and buffers to disk. */
 void FlushStateToDisk();
 /** Prune block files and flush state to disk. */

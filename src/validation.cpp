@@ -155,7 +155,7 @@ namespace {
             g_shadowfork_lazy_block_index.active_tip_height == g_shadowfork_lazy_block_index.eager_base_height;
     }
 
-    bool IsBelowShadowForkStartupCutWindow(int height)
+    bool IsBelowShadowForkStartupCutWindowInternal(int height)
     {
         return IsShadowForkStartupCutLazyWindow() &&
             height >= 0 &&
@@ -243,6 +243,11 @@ namespace {
     /** Dirty block file entries. */
     std::set<int> setDirtyFileInfo;
 } // anon namespace
+
+bool IsBelowShadowForkStartupCutWindow(int height)
+{
+    return IsBelowShadowForkStartupCutWindowInternal(height);
+}
 
 /* Use this class to start tracking transactions that are removed from the
  * mempool and pass all those transactions through SyncTransaction when the
