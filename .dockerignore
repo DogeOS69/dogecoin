@@ -1,0 +1,30 @@
+# Build artifacts from local compilation
+src/.libs/
+src/**/.libs/
+src/**/*.o
+src/**/*.lo
+src/**/*.la
+*.o
+*.lo
+*.la
+.libs/
+
+# Autotools generated
+autom4te.cache/
+config.log
+config.status
+
+# Git
+.git
+
+# IDE
+.vscode/
+.idea/
+
+# CI
+.github/
+.travis.yml
+
+# Docs (keep doc/man - required by build)
+doc/README*
+doc/*.md

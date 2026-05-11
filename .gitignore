@@ -132,3 +132,6 @@ stage/
 
 # AI context
 references/
+
+# Rust build output
+contrib/doge-shadow/target/
