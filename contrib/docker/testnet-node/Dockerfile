@@ -66,6 +66,8 @@ RUN find . -type f \( \
 ARG STRIP_BINARIES=1
 
 # Build dogecoind with wallet support (needed for generatetoaddress mining).
+# Utilities stay disabled because shadowfork runtime instances only need the
+# daemon; .dockerignore keeps stale local libtool artifacts out of this build.
 # --with-incompatible-bdb: accept system BDB 5.3 (matches libdb5.3++-dev above).
 # Strip binaries by default to reduce image size.
 RUN ./autogen.sh \
@@ -73,9 +75,10 @@ RUN ./autogen.sh \
         --disable-tests \
         --disable-bench \
         --without-gui \
+        --with-utils=no \
         --with-incompatible-bdb \
     && make -j$(nproc) \
-    && if [ "$STRIP_BINARIES" = "1" ]; then strip src/dogecoind src/dogecoin-cli; fi
+    && if [ "$STRIP_BINARIES" = "1" ]; then strip src/dogecoind; fi
 
 # =============================================================================
 # Stage 2: Runtime image (slim Debian for smaller footprint)
@@ -112,7 +115,6 @@ RUN mkdir -p /data /config /usr/local/bin \
 
 # Copy stripped binaries from builder
 COPY --from=builder /dogecoin/src/dogecoind /usr/local/bin/
-COPY --from=builder /dogecoin/src/dogecoin-cli /usr/local/bin/
 
 # Copy entrypoint script (make world-readable and executable)
 COPY contrib/docker/testnet-node/scripts/entrypoint.sh /entrypoint.sh

@@ -329,6 +329,8 @@ void UnlinkPrunedFiles(const std::set<int>& setFilesToPrune);
 
 /** Create a new block index entry for a given block hash */
 CBlockIndex * InsertBlockIndex(uint256 hash);
+/** Return a block index entry only if it is already materialized in memory. */
+CBlockIndex* FindLoadedBlockIndex(const uint256& hash);
 /** Return a loaded block index entry, lazily materializing active-chain entries in shadowfork mode when needed. */
 CBlockIndex* LookupBlockIndex(const uint256& hash);
 /** Flush all state, indexes and buffers to disk. */

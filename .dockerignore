@@ -1,0 +1,27 @@
+.git
+
+# Local/autotools build outputs must not enter container builds. Stale libtool
+# artifacts, especially bundled UniValue .la files, can make dogecoind link
+# against host-generated paths instead of freshly built Linux artifacts.
+**/.deps
+**/.dirstamp
+**/.libs
+**/Makefile
+**/autom4te.cache
+**/config.log
+**/config.status
+**/libtool
+**/stamp-h1
+**/*.a
+**/*.la
+**/*.lai
+**/*.lo
+**/*.o
+
+# Editor/autoconf backups and local binary drops.
+*~
+**/*~
+build-*.dogecoind
+src/dogecoind
+src/dogecoin-cli
+src/dogecoin-tx

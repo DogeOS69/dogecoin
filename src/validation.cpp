@@ -534,7 +534,13 @@ bool CheckSequenceLocks(const CTransaction &tx, int flags, LockPoints* lp, bool 
                     maxInputHeight = std::max(maxInputHeight, height);
                 }
             }
-            if (IsBelowShadowForkStartupCutWindow(maxInputHeight)) {
+            // If no relative lock-time constraints survived CalculateSequenceLocks()
+            // then these LockPoints do not depend on any historical block. Avoid
+            // asking lazy shadowfork indexes to materialize the genesis ancestor
+            // for version-2 transactions whose sequences disable BIP68.
+            if (lockPair.first == -1 && lockPair.second == -1) {
+                lp->maxInputBlock = NULL;
+            } else if (IsBelowShadowForkStartupCutWindow(maxInputHeight)) {
                 // Shadowfork prepared volumes can contain very old inherited
                 // UTXOs. Caching a lockpoint for those inputs forces lazy
                 // materialization of a deep source-chain ancestor while
@@ -4186,6 +4192,14 @@ CBlockIndex* LookupBlockIndex(const uint256& hash)
         return NULL;
     }
     return pindex;
+}
+
+CBlockIndex* FindLoadedBlockIndex(const uint256& hash)
+{
+    AssertLockHeld(cs_main);
+
+    BlockMap::iterator it = mapBlockIndex.find(hash);
+    return it == mapBlockIndex.end() ? NULL : it->second;
 }
 
 static bool TryLoadShadowForkSnapshot(const CChainParams& chainparams)

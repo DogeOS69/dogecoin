@@ -3847,7 +3847,12 @@ CWallet* CWallet::CreateWalletFromFile(const std::string walletFile)
     RegisterValidationInterface(walletInstance);
 
     CBlockIndex *pindexRescan = chainActive.Tip();
-    if (GetBoolArg("-rescan", false))
+    const bool fShadowForkMode = Params().GetConsensus(chainActive.Height()).fShadowForkMode;
+    if (fShadowForkMode) {
+        // Shadowfork datadirs are cloned from an already-synced frozen base, so
+        // the wallet's persisted locator should not drive a rescan decision here.
+        LogPrintf("Shadowfork wallet init: using active tip directly and skipping locator-based rescan selection\n");
+    } else if (GetBoolArg("-rescan", false))
         pindexRescan = chainActive.Genesis();
     else
     {
@@ -3957,7 +3962,12 @@ void CWallet::postInitProcess(boost::thread_group& threadGroup)
 {
     // Add wallet transactions that aren't already in a block to mempool
     // Do this here as mempool requires genesis block to be loaded
-    ReacceptWalletTransactions();
+    const bool fShadowForkMode = Params().GetConsensus(chainActive.Height()).fShadowForkMode;
+    if (fShadowForkMode) {
+        LogPrintf("Shadowfork wallet post-init: skipping ReacceptWalletTransactions on cloned base\n");
+    } else {
+        ReacceptWalletTransactions();
+    }
 
     // Run a thread to flush wallet periodically
     if (!CWallet::fFlushThreadRunning.exchange(true)) {
