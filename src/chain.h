@@ -500,6 +500,11 @@ public:
         return vChain.empty() ? -1 : nBaseHeight + vChain.size() - 1;
     }
 
+    /** Return the first height kept eagerly in memory. */
+    int WindowStartHeight() const {
+        return vChain.empty() ? -1 : nBaseHeight;
+    }
+
     /** Set/initialize a chain with a given tip. */
     void SetTip(CBlockIndex *pindex);
 

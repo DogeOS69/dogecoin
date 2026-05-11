@@ -109,8 +109,15 @@ const CBlockIndex *CChain::FindFork(const CBlockIndex *pindex) const {
     }
     if (pindex->nHeight > Height())
         pindex = pindex->GetAncestor(Height());
-    while (pindex && !Contains(pindex))
-        pindex = pindex->pprev;
+    while (pindex && !Contains(pindex)) {
+        if (pindex->pprev) {
+            pindex = pindex->pprev;
+        } else if (pindex->nHeight > 0) {
+            pindex = LoadShadowForkActiveChainIndex(pindex->nHeight - 1);
+        } else {
+            pindex = NULL;
+        }
+    }
     return pindex;
 }
 
@@ -174,7 +181,8 @@ CBlockIndex* CBlockIndex::GetAncestor(int height)
             if (pindexWalk->pprev == NULL) {
                 pindexWalk->pprev = LoadShadowForkActiveChainIndex(heightWalk - 1);
             }
-            assert(pindexWalk->pprev);
+            if (pindexWalk->pprev == NULL)
+                return NULL;
             pindexWalk = pindexWalk->pprev;
             heightWalk--;
         }

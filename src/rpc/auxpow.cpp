@@ -37,6 +37,21 @@ static std::vector<std::unique_ptr<CBlockTemplate>> vNewBlockTemplate;
 
 void AuxMiningCheck()
 {
+    bool fShadowForkMode = false;
+
+    /* This should never fail, since the chain is already
+       past the point of merge-mining start.  Check nevertheless.  */
+    {
+        LOCK(cs_main);
+        const Consensus::Params& consensus = Params().GetConsensus(chainActive.Height() + 1);
+        fShadowForkMode = consensus.fShadowForkMode;
+        if (!fShadowForkMode && consensus.fAllowLegacyBlocks)
+            throw std::runtime_error("getauxblock method is not yet available");
+    }
+
+    if (fShadowForkMode)
+        return;
+
     if(!g_connman)
         throw JSONRPCError(RPC_CLIENT_P2P_DISABLED, "Error: Peer-to-peer functionality missing or disabled");
 
@@ -46,14 +61,6 @@ void AuxMiningCheck()
     if (IsInitialBlockDownload() && !Params().MineBlocksOnDemand())
         throw JSONRPCError(RPC_CLIENT_IN_INITIAL_DOWNLOAD,
                            "Dogecoin is downloading blocks...");
-
-    /* This should never fail, since the chain is already
-       past the point of merge-mining start.  Check nevertheless.  */
-    {
-        LOCK(cs_main);
-        if (Params().GetConsensus(chainActive.Height() + 1).fAllowLegacyBlocks)
-            throw std::runtime_error("getauxblock method is not yet available");
-    }
 }
 
 static UniValue AuxMiningCreateBlock(const CScript& scriptPubKey)

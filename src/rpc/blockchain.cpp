@@ -189,8 +189,9 @@ UniValue blockToJSON(const CBlock& block, const CBlockIndex* blockindex, bool tx
     if (block.auxpow)
         result.pushKV("auxpow", AuxpowToJSON(*block.auxpow));
 
+    const bool on_active_chain = chainActive.Contains(blockindex);
     const CBlockIndex* pprev = blockindex->pprev;
-    if (pprev == NULL && blockindex->nHeight > 0) {
+    if (pprev == NULL && on_active_chain && blockindex->nHeight > 0) {
         pprev = chainActive[blockindex->nHeight - 1];
     }
     if (pprev)
@@ -773,7 +774,7 @@ static CBlockUndo GetUndoChecked(const CBlockIndex* pblockindex)
     }
 
     const CBlockIndex* pprev = pblockindex->pprev;
-    if (pprev == NULL && pblockindex->nHeight > 0) {
+    if (pprev == NULL && chainActive.Contains(pblockindex) && pblockindex->nHeight > 0) {
         pprev = chainActive[pblockindex->nHeight - 1];
     }
     if (pprev == NULL || !UndoReadFromDisk(blockUndo, pblockindex->GetUndoPos(), pprev->GetBlockHash())) {
@@ -855,17 +856,15 @@ UniValue getblock(const JSONRPCRequest& request)
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
 
         block = GetBlockChecked(pblockindex);
+
+        if (verbosity > 0)
+            return blockToJSON(block, pblockindex, verbosity >= 2);
     }
 
-    if (verbosity <= 0)
-    {
-        CDataStream ssBlock(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
-        ssBlock << block;
-        std::string strHex = HexStr(ssBlock.begin(), ssBlock.end());
-        return strHex;
-    }
-
-    return blockToJSON(block, pblockindex, verbosity >= 2);
+    CDataStream ssBlock(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
+    ssBlock << block;
+    std::string strHex = HexStr(ssBlock.begin(), ssBlock.end());
+    return strHex;
 }
 
 struct CCoinsStats

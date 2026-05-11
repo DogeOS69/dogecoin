@@ -51,18 +51,16 @@ int CMerkleTx::GetDepthInMainChain(const CBlockIndex* &pindexRet) const
 
     const Consensus::Params& consensus = Params().GetConsensus(chainActive.Height());
 
-    // In shadowfork mode, historical wallet transactions copied from the frozen
-    // base are trusted input data. Avoid forcing lazy materialization of old
-    // active-chain block index entries just to compute a confirmation depth for
-    // those transactions.
+    // In shadowfork mode, inherited wallet records can point at source-chain
+    // history outside the current fork. Only report depth when active-chain
+    // membership can be proven.
     if (consensus.fShadowForkMode) {
-        CBlockIndex* loaded = FindLoadedBlockIndex(hashBlock);
-        if (loaded && chainActive.Contains(loaded)) {
-            pindexRet = loaded;
-            return ((nIndex == -1) ? (-1) : 1) * (chainActive.Height() - loaded->nHeight + 1);
-        }
-        pindexRet = chainActive.Tip();
-        return ((nIndex == -1) ? (-1) : 1) * (chainActive.Height() + 1);
+        CBlockIndex* pindex = LookupBlockIndex(hashBlock);
+        if (!pindex || !chainActive.Contains(pindex))
+            return 0;
+
+        pindexRet = pindex;
+        return ((nIndex == -1) ? (-1) : 1) * (chainActive.Height() - pindex->nHeight + 1);
     }
 
     // Find the block it claims to be in.

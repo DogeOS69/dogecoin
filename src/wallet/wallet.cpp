@@ -51,10 +51,16 @@ const char * DEFAULT_WALLET_DAT = "wallet.dat";
 const uint32_t BIP32_HARDENED_KEY_LIMIT = 0x80000000;
 const uint32_t BIP44_COIN_TYPE = 3;
 
-static bool IsShadowForkMemoryOnlyWallet()
+static bool IsShadowForkWalletRescanSkipped()
 {
     return Params().GetConsensus(0).fShadowForkMode &&
         GetBoolArg("-shadowforkskipwalletrescan", true);
+}
+
+static bool IsShadowForkMemoryOnlyWallet()
+{
+    return Params().GetConsensus(0).fShadowForkMode &&
+        GetBoolArg("-shadowforkmemoryonlywallet", false);
 }
 
 /**
@@ -1568,7 +1574,7 @@ CBlockIndex* CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool f
     {
         LOCK2(cs_main, cs_wallet);
 
-        if (IsShadowForkMemoryOnlyWallet()) {
+        if (IsShadowForkWalletRescanSkipped()) {
             LogPrintf("%s: shadow fork mode: skipped wallet rescan from height=%d tip=%d\n",
                 __func__,
                 pindex ? pindex->nHeight : -1,
@@ -3852,6 +3858,7 @@ CWallet* CWallet::CreateWalletFromFile(const std::string walletFile)
         // Shadowfork datadirs are cloned from an already-synced frozen base, so
         // the wallet's persisted locator should not drive a rescan decision here.
         LogPrintf("Shadowfork wallet init: using active tip directly and skipping locator-based rescan selection\n");
+        walletInstance->SetBestChain(GetWalletBestChainLocator());
     } else if (GetBoolArg("-rescan", false))
         pindexRescan = chainActive.Genesis();
     else
@@ -3860,7 +3867,7 @@ CWallet* CWallet::CreateWalletFromFile(const std::string walletFile)
         CBlockLocator locator;
         if (walletdb.ReadBestBlock(locator)) {
             pindexRescan = FindForkInGlobalIndex(chainActive, locator);
-            if (IsShadowForkMemoryOnlyWallet() && pindexRescan != chainActive.Tip()) {
+            if (IsShadowForkWalletRescanSkipped() && pindexRescan != chainActive.Tip()) {
                 LogPrintf("Shadow fork wallet rescan skipped: wallet best fork height=%d, active tip height=%d\n",
                     pindexRescan ? pindexRescan->nHeight : -1,
                     chainActive.Tip() ? chainActive.Tip()->nHeight : -1);
