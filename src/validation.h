@@ -233,17 +233,18 @@ static const uint64_t MIN_DISK_SPACE_FOR_BLOCK_FILES = 2200ULL * 1024 * 1024;
  * install a CValidationInterface (see validationinterface.h) - this will have
  * its BlockChecked method called whenever *any* block completes validation.
  *
- * Note that we guarantee that either the proof-of-work is valid on pblock, or
- * (and possibly also) BlockChecked will have been called.
+ * Note that when fCheckPOW is true we guarantee that either the proof-of-work
+ * is valid on pblock, or (and possibly also) BlockChecked will have been called.
  * 
  * Call without cs_main held.
  *
  * @param[in]   pblock  The block we want to process.
  * @param[in]   fForceProcessing Process this block even if unrequested; used for non-network block sources and whitelisted peers.
  * @param[out]  fNewBlock A boolean which is set to indicate if the block was first received via this call
+ * @param[in]   fCheckPOW Whether to verify proof-of-work while accepting this block.
  * @return True if state.IsValid()
  */
-bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool* fNewBlock);
+bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool* fNewBlock, bool fCheckPOW = true);
 
 /**
  * Process incoming block headers.

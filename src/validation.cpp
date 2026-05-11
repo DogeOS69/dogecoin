@@ -107,6 +107,11 @@ namespace {
         return params.GetConsensus(0).fShadowForkMode && GetBoolArg(arg, true);
     }
 
+    bool IsShadowForkInstantMiningEnabled(const Consensus::Params& consensusParams)
+    {
+        return consensusParams.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true);
+    }
+
     struct ShadowForkLazyBlockIndexState
     {
         bool enabled;
@@ -1272,8 +1277,7 @@ static bool ReadBlockOrHeader(T& block, const CDiskBlockPos& pos, const Consensu
     }
 
     // Shadowfork instant-mined blocks do not satisfy canonical PoW checks.
-    const bool fSkipShadowForkPow =
-        consensusParams.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true);
+    const bool fSkipShadowForkPow = IsShadowForkInstantMiningEnabled(consensusParams);
 
     // Check the header
     if (fCheckPOW && !fSkipShadowForkPow && !CheckAuxPowProofOfWork(block, consensusParams))
@@ -1904,7 +1908,8 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     // is enforced in ContextualCheckBlockHeader(); we wouldn't want to
     // re-enforce that rule here (at least until we make it impossible for
     // GetAdjustedTime() to go backward).
-    if (!CheckBlock(block, state, !fJustCheck, !fJustCheck)) {
+    const bool fCheckPOW = !fJustCheck && !IsShadowForkInstantMiningEnabled(consensus);
+    if (!CheckBlock(block, state, fCheckPOW, !fJustCheck)) {
         if (state.CorruptionPossible()) {
             LogPrintf("%s: Attempt to connect corrupted block %s.\n", __func__, block.GetHash().ToString());
             // We don't write down blocks to disk if they may have been
@@ -3061,8 +3066,7 @@ bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, bool f
     // knowing the previous block), but that's okay, as the checks done are permissive
     // (i.e. doesn't check work limit or whether AuxPoW is enabled)
     const Consensus::Params& consensus = Params().GetConsensus(0);
-    const bool fSkipShadowForkPow = consensus.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true);
-    if (fCheckPOW && !fSkipShadowForkPow && !CheckAuxPowProofOfWork(block, consensus))
+    if (fCheckPOW && !CheckAuxPowProofOfWork(block, consensus))
         return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
 
     return true;
@@ -3340,7 +3344,7 @@ bool ContextualCheckBlock(const CBlock& block, CValidationState& state, const CB
     return true;
 }
 
-static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex)
+static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool fCheckPOW = true)
 {
     AssertLockHeld(cs_main);
     // Check for duplicate
@@ -3359,7 +3363,7 @@ static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state
             return true;
         }
 
-        if (!CheckBlockHeader(block, state))
+        if (!CheckBlockHeader(block, state, fCheckPOW))
             return error("%s: Consensus::CheckBlockHeader: %s, %s", __func__, hash.ToString(), FormatStateMessage(state));
 
         // Get prev block index
@@ -3424,7 +3428,7 @@ bool ProcessNewBlockHeaders(const std::vector<CBlockHeader>& headers, CValidatio
 }
 
 /** Store block on disk. If dbp is non-NULL, the file is known to already reside on disk */
-static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool fRequested, const CDiskBlockPos* dbp, bool* fNewBlock)
+static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool fRequested, const CDiskBlockPos* dbp, bool* fNewBlock, bool fCheckPOW = true)
 {
     const CBlock& block = *pblock;
 
@@ -3434,7 +3438,7 @@ static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidation
     CBlockIndex *pindexDummy = NULL;
     CBlockIndex *&pindex = ppindex ? *ppindex : pindexDummy;
 
-    if (!AcceptBlockHeader(block, state, chainparams, &pindex))
+    if (!AcceptBlockHeader(block, state, chainparams, &pindex, fCheckPOW))
         return false;
 
     // Try to process all requested blocks that we don't have, but only
@@ -3464,7 +3468,7 @@ static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidation
     }
     if (fNewBlock) *fNewBlock = true;
 
-    if (!CheckBlock(block, state) ||
+    if (!CheckBlock(block, state, fCheckPOW) ||
         !ContextualCheckBlock(block, state, pindex->pprev)) {
         if (state.IsInvalid() && !state.CorruptionPossible()) {
             pindex->nStatus |= BLOCK_FAILED_VALID;
@@ -3503,7 +3507,7 @@ static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidation
     return true;
 }
 
-bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool *fNewBlock)
+bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool *fNewBlock, bool fCheckPOW)
 {
     {
         CBlockIndex *pindex = NULL;
@@ -3511,13 +3515,13 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
         CValidationState state;
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
-        bool ret = CheckBlock(*pblock, state);
+        bool ret = CheckBlock(*pblock, state, fCheckPOW);
 
         LOCK(cs_main);
 
         if (ret) {
             // Store to disk
-            ret = AcceptBlock(pblock, state, chainparams, &pindex, fForceProcessing, NULL, fNewBlock);
+            ret = AcceptBlock(pblock, state, chainparams, &pindex, fForceProcessing, NULL, fNewBlock, fCheckPOW);
         }
         CheckBlockIndex(chainparams.GetConsensus(chainActive.Height()));
         if (!ret) {
@@ -4575,7 +4579,8 @@ bool CVerifyDB::VerifyDB(const CChainParams& chainparams, CCoinsView *coinsview,
         if (!ReadBlockFromDisk(block, pindex, chainparams.GetConsensus(pindex->nHeight)))
             return error("VerifyDB(): *** ReadBlockFromDisk failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
         // check level 1: verify block validity
-        if (nCheckLevel >= 1 && !CheckBlock(block, state))
+        const bool fVerifyPOW = !IsShadowForkInstantMiningEnabled(chainparams.GetConsensus(pindex->nHeight));
+        if (nCheckLevel >= 1 && !CheckBlock(block, state, fVerifyPOW))
             return error("%s: *** found bad block at %d, hash=%s (%s)\n", __func__,
                          pindex->nHeight, pindex->GetBlockHash().ToString(), FormatStateMessage(state));
         // check level 2: verify undo validity
@@ -5017,7 +5022,8 @@ bool LoadExternalBlockFile(const CChainParams& chainparams, FILE* fileIn, CDiskB
                 if (mapBlockIndex.count(hash) == 0 || (mapBlockIndex[hash]->nStatus & BLOCK_HAVE_DATA) == 0) {
                     LOCK(cs_main);
                     CValidationState state;
-                    if (AcceptBlock(pblock, state, chainparams, NULL, true, dbp, NULL))
+                    const bool fCheckPOW = !IsShadowForkInstantMiningEnabled(chainparams.GetConsensus(0));
+                    if (AcceptBlock(pblock, state, chainparams, NULL, true, dbp, NULL, fCheckPOW))
                         nLoaded++;
                     if (state.IsError())
                         break;
@@ -5052,7 +5058,8 @@ bool LoadExternalBlockFile(const CChainParams& chainparams, FILE* fileIn, CDiskB
                                     head.ToString());
                             LOCK(cs_main);
                             CValidationState dummy;
-                            if (AcceptBlock(pblockrecursive, dummy, chainparams, NULL, true, &it->second, NULL))
+                            const bool fCheckPOW = !IsShadowForkInstantMiningEnabled(chainparams.GetConsensus(0));
+                            if (AcceptBlock(pblockrecursive, dummy, chainparams, NULL, true, &it->second, NULL, fCheckPOW))
                             {
                                 nLoaded++;
                                 queue.push_back(pblockrecursive->GetHash());

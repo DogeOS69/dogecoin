@@ -163,7 +163,13 @@ static UniValue AuxMiningSubmitBlock(const uint256 hash, const CAuxPow auxpow)
     submitblock_StateCatcher sc(block.GetHash());
     RegisterValidationInterface(&sc);
     std::shared_ptr<const CBlock> shared_block = std::make_shared<const CBlock>(block);
-    ProcessNewBlock(Params(), shared_block, true, nullptr);
+    bool fCheckPOW = true;
+    {
+        LOCK(cs_main);
+        const Consensus::Params& consensus = Params().GetConsensus(chainActive.Height() + 1);
+        fCheckPOW = !(consensus.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true));
+    }
+    ProcessNewBlock(Params(), shared_block, true, nullptr, fCheckPOW);
     UnregisterValidationInterface(&sc);
 
     return BIP22ValidationResult(sc.state);

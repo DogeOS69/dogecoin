@@ -165,7 +165,7 @@ UniValue generateBlocks(std::shared_ptr<CReserveScript> coinbaseScript, int nGen
             }
         }
         std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(*pblock);
-        if (!ProcessNewBlock(Params(), shared_pblock, true, NULL)) {
+        if (!ProcessNewBlock(Params(), shared_pblock, true, NULL, !fShadowForkInstantMining)) {
             if (nMineAuxPow) {
                 continue;
             }
@@ -815,18 +815,21 @@ UniValue submitblock(const JSONRPCRequest& request)
         }
     }
 
+    bool fCheckPOW = true;
     {
         LOCK(cs_main);
         CBlockIndex* pprev = LookupBlockIndex(block.hashPrevBlock);
         if (pprev != NULL) {
-            int nHeight = chainActive.Height() + 1;
-            UpdateUncommittedBlockStructures(block, pprev, Params().GetConsensus(nHeight));
+            int nHeight = pprev->nHeight + 1;
+            const Consensus::Params& consensus = Params().GetConsensus(nHeight);
+            fCheckPOW = !(consensus.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true));
+            UpdateUncommittedBlockStructures(block, pprev, consensus);
         }
     }
 
     submitblock_StateCatcher sc(block.GetHash());
     RegisterValidationInterface(&sc);
-    bool fAccepted = ProcessNewBlock(Params(), blockptr, true, NULL);
+    bool fAccepted = ProcessNewBlock(Params(), blockptr, true, NULL, fCheckPOW);
     UnregisterValidationInterface(&sc);
     if (fBlockPresent)
     {
