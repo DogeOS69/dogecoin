@@ -233,17 +233,18 @@ static const uint64_t MIN_DISK_SPACE_FOR_BLOCK_FILES = 2200ULL * 1024 * 1024;
  * install a CValidationInterface (see validationinterface.h) - this will have
  * its BlockChecked method called whenever *any* block completes validation.
  *
- * Note that we guarantee that either the proof-of-work is valid on pblock, or
- * (and possibly also) BlockChecked will have been called.
+ * Note that when fCheckPOW is true we guarantee that either the proof-of-work
+ * is valid on pblock, or (and possibly also) BlockChecked will have been called.
  * 
  * Call without cs_main held.
  *
  * @param[in]   pblock  The block we want to process.
  * @param[in]   fForceProcessing Process this block even if unrequested; used for non-network block sources and whitelisted peers.
  * @param[out]  fNewBlock A boolean which is set to indicate if the block was first received via this call
+ * @param[in]   fCheckPOW Whether to verify proof-of-work while accepting this block.
  * @return True if state.IsValid()
  */
-bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool* fNewBlock);
+bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool* fNewBlock, bool fCheckPOW = true);
 
 /**
  * Process incoming block headers.
@@ -271,6 +272,10 @@ bool LoadExternalBlockFile(const CChainParams& chainparams, FILE* fileIn, CDiskB
 bool InitBlockIndex(const CChainParams& chainparams);
 /** Load the block tree and coins database from disk */
 bool LoadBlockIndex(const CChainParams& chainparams);
+/** Build or refresh the global shadowfork block-index snapshot from the current source datadir. */
+bool BuildShadowForkBlockIndexSnapshot(const CChainParams& chainparams);
+/** In shadowfork mode, cut the active chain to -shadowfork=<height> after startup verification. */
+bool ApplyShadowForkStartupCut(const CChainParams& chainparams);
 /** Unload database information */
 void UnloadBlockIndex();
 /** Run an instance of the script checking thread */
@@ -325,6 +330,10 @@ void UnlinkPrunedFiles(const std::set<int>& setFilesToPrune);
 
 /** Create a new block index entry for a given block hash */
 CBlockIndex * InsertBlockIndex(uint256 hash);
+/** Return a block index entry only if it is already materialized in memory. */
+CBlockIndex* FindLoadedBlockIndex(const uint256& hash);
+/** Return a loaded block index entry, lazily materializing active-chain entries in shadowfork mode when needed. */
+CBlockIndex* LookupBlockIndex(const uint256& hash);
 /** Flush all state, indexes and buffers to disk. */
 void FlushStateToDisk();
 /** Prune block files and flush state to disk. */

@@ -41,11 +41,36 @@ CBlockHeader CBlockIndex::GetBlockHeader(const Consensus::Params& consensusParam
 void CChain::SetTip(CBlockIndex *pindex) {
     if (pindex == NULL) {
         vChain.clear();
+        nBaseHeight = 0;
         return;
     }
-    vChain.resize(pindex->nHeight + 1);
-    while (pindex && vChain[pindex->nHeight] != pindex) {
-        vChain[pindex->nHeight] = pindex;
+
+    if (vChain.empty()) {
+        nBaseHeight = 0;
+    } else if (nBaseHeight > pindex->nHeight) {
+        nBaseHeight = pindex->nHeight;
+    }
+
+    vChain.resize(pindex->nHeight - nBaseHeight + 1);
+    while (pindex && pindex->nHeight >= nBaseHeight &&
+           vChain[pindex->nHeight - nBaseHeight] != pindex) {
+        vChain[pindex->nHeight - nBaseHeight] = pindex;
+        pindex = pindex->pprev;
+    }
+}
+
+void CChain::SetTipWindow(CBlockIndex *pindex, int nWindowStartHeight) {
+    if (pindex == NULL) {
+        vChain.clear();
+        nBaseHeight = 0;
+        return;
+    }
+
+    nBaseHeight = std::max(0, std::min(nWindowStartHeight, pindex->nHeight));
+    vChain.resize(pindex->nHeight - nBaseHeight + 1);
+    while (pindex && pindex->nHeight >= nBaseHeight &&
+           vChain[pindex->nHeight - nBaseHeight] != pindex) {
+        vChain[pindex->nHeight - nBaseHeight] = pindex;
         pindex = pindex->pprev;
     }
 }
@@ -84,16 +109,41 @@ const CBlockIndex *CChain::FindFork(const CBlockIndex *pindex) const {
     }
     if (pindex->nHeight > Height())
         pindex = pindex->GetAncestor(Height());
-    while (pindex && !Contains(pindex))
-        pindex = pindex->pprev;
+    while (pindex && !Contains(pindex)) {
+        if (pindex->pprev) {
+            pindex = pindex->pprev;
+        } else if (pindex->nHeight > 0) {
+            pindex = LoadShadowForkActiveChainIndex(pindex->nHeight - 1);
+        } else {
+            pindex = NULL;
+        }
+    }
     return pindex;
 }
 
 CBlockIndex* CChain::FindEarliestAtLeast(int64_t nTime) const
 {
-    std::vector<CBlockIndex*>::const_iterator lower = std::lower_bound(vChain.begin(), vChain.end(), nTime,
-        [](CBlockIndex* pBlock, const int64_t& time) -> bool { return pBlock->GetBlockTimeMax() < time; });
-    return (lower == vChain.end() ? NULL : *lower);
+    if (vChain.empty()) {
+        return NULL;
+    }
+
+    int low = 0;
+    int high = Height();
+    CBlockIndex* result = NULL;
+    while (low <= high) {
+        const int mid = low + (high - low) / 2;
+        CBlockIndex* pBlock = (*this)[mid];
+        if (pBlock == NULL) {
+            return result;
+        }
+        if (pBlock->GetBlockTimeMax() < nTime) {
+            low = mid + 1;
+        } else {
+            result = pBlock;
+            high = mid - 1;
+        }
+    }
+    return result;
 }
 
 /** Turn the lowest '1' bit in the binary representation of a number into a '0'. */
@@ -128,7 +178,11 @@ CBlockIndex* CBlockIndex::GetAncestor(int height)
             pindexWalk = pindexWalk->pskip;
             heightWalk = heightSkip;
         } else {
-            assert(pindexWalk->pprev);
+            if (pindexWalk->pprev == NULL) {
+                pindexWalk->pprev = LoadShadowForkActiveChainIndex(heightWalk - 1);
+            }
+            if (pindexWalk->pprev == NULL)
+                return NULL;
             pindexWalk = pindexWalk->pprev;
             heightWalk--;
         }

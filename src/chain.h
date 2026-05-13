@@ -16,6 +16,13 @@
 
 #include <vector>
 
+class CBlockIndex;
+
+/**
+ * Shadowfork-only lazy active-chain lookup hook. Normal nodes return NULL here.
+ */
+CBlockIndex* LoadShadowForkActiveChainIndex(int nHeight);
+
 class CBlockFileInfo
 {
 public:
@@ -290,8 +297,16 @@ public:
         int64_t* pend = &pmedian[nMedianTimeSpan];
 
         const CBlockIndex* pindex = this;
-        for (int i = 0; i < nMedianTimeSpan && pindex; i++, pindex = pindex->pprev)
+        for (int i = 0; i < nMedianTimeSpan && pindex; i++) {
             *(--pbegin) = pindex->GetBlockTime();
+            if (pindex->pprev) {
+                pindex = pindex->pprev;
+            } else if (pindex->nHeight > 0) {
+                pindex = LoadShadowForkActiveChainIndex(pindex->nHeight - 1);
+            } else {
+                pindex = NULL;
+            }
+        }
 
         std::sort(pbegin, pend);
         return pbegin[(pend - pbegin)/2];
@@ -433,11 +448,14 @@ public:
 class CChain {
 private:
     std::vector<CBlockIndex*> vChain;
+    int nBaseHeight;
 
 public:
+    CChain() : nBaseHeight(0) {}
+
     /** Returns the index entry for the genesis block of this chain, or NULL if none. */
     CBlockIndex *Genesis() const {
-        return vChain.size() > 0 ? vChain[0] : NULL;
+        return (*this)[0];
     }
 
     /** Returns the index entry for the tip of this chain, or NULL if none. */
@@ -447,9 +465,13 @@ public:
 
     /** Returns the index entry at a particular height in this chain, or NULL if no such height exists. */
     CBlockIndex *operator[](int nHeight) const {
-        if (nHeight < 0 || nHeight >= (int)vChain.size())
+        if (nHeight < 0 || nHeight > Height())
             return NULL;
-        return vChain[nHeight];
+        if (vChain.empty())
+            return NULL;
+        if (nHeight < nBaseHeight)
+            return LoadShadowForkActiveChainIndex(nHeight);
+        return vChain[nHeight - nBaseHeight];
     }
 
     /** Compare two chains efficiently. */
@@ -460,6 +482,8 @@ public:
 
     /** Efficiently check whether a block is present in this chain. */
     bool Contains(const CBlockIndex *pindex) const {
+        if (pindex == NULL)
+            return false;
         return (*this)[pindex->nHeight] == pindex;
     }
 
@@ -473,11 +497,19 @@ public:
 
     /** Return the maximal height in the chain. Is equal to chain.Tip() ? chain.Tip()->nHeight : -1. */
     int Height() const {
-        return vChain.size() - 1;
+        return vChain.empty() ? -1 : nBaseHeight + vChain.size() - 1;
+    }
+
+    /** Return the first height kept eagerly in memory. */
+    int WindowStartHeight() const {
+        return vChain.empty() ? -1 : nBaseHeight;
     }
 
     /** Set/initialize a chain with a given tip. */
     void SetTip(CBlockIndex *pindex);
+
+    /** Set/initialize a chain with a given tip but only keep [nWindowStartHeight, tip] eagerly loaded. */
+    void SetTipWindow(CBlockIndex *pindex, int nWindowStartHeight);
 
     /** Return a CBlockLocator that refers to a block in this chain (by default the tip). */
     CBlockLocator GetLocator(const CBlockIndex *pindex = NULL) const;

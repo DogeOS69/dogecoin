@@ -27,6 +27,7 @@
 #include "random.h"
 #include "script/script.h"
 #include "script/sigcache.h"
+#include "shadowfork_snapshot.h"
 #include "script/standard.h"
 #include "timedata.h"
 #include "tinyformat.h"
@@ -87,12 +88,8 @@ CAmount maxTxFee = DEFAULT_TRANSACTION_MAXFEE;
 
 CTxMemPool mempool(::minRelayTxFeeRate);
 
-/**
- * Returns true if there are nRequired or more blocks of minVersion or above
- * in the last Consensus::Params::nMajorityWindow blocks, starting at pstart and going backwards.
- */
-static bool IsSuperMajority(int minVersion, const CBlockIndex* pstart, unsigned nRequired, const Consensus::Params& consensusParams);
 static void CheckBlockIndex(const Consensus::Params& consensusParams);
+static bool EnsureShadowForkActiveChainParentLoaded(CBlockIndex* pindex, bool fShadowForkFastCandidates);
 
 /** Constant stuff for coinbase transactions we create: */
 CScript COINBASE_FLAGS;
@@ -102,9 +99,67 @@ const std::string strMessageMagic = "Dogecoin Signed Message:\n";
 // Internal stuff
 namespace {
 
+    static const int DEFAULT_SHADOWFORK_SNAPSHOT_WINDOW = 8192;
+    static const int SHADOWFORK_LAZY_ACTIVE_CHAIN_CHUNK = 256;
+
     bool IsShadowForkOptimizationEnabled(const CChainParams& params, const char* arg)
     {
         return params.GetConsensus(0).fShadowForkMode && GetBoolArg(arg, true);
+    }
+
+    bool IsShadowForkInstantMiningEnabled(const Consensus::Params& consensusParams)
+    {
+        return consensusParams.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true);
+    }
+
+    struct ShadowForkLazyBlockIndexState
+    {
+        bool enabled;
+        std::string source_chain;
+        int snapshot_tip_height;
+        int active_tip_height;
+        int eager_base_height;
+        bool fast_candidates;
+        std::unique_ptr<ShadowForkSnapshotReader> reader;
+        std::vector<ShadowForkActiveChainRecord> delta_records;
+
+        ShadowForkLazyBlockIndexState()
+            : enabled(false),
+              snapshot_tip_height(-1),
+              active_tip_height(-1),
+              eager_base_height(0),
+              fast_candidates(false)
+        {
+        }
+
+        void Reset()
+        {
+            enabled = false;
+            source_chain.clear();
+            snapshot_tip_height = -1;
+            active_tip_height = -1;
+            eager_base_height = 0;
+            fast_candidates = false;
+            reader.reset();
+            delta_records.clear();
+        }
+    };
+
+    ShadowForkLazyBlockIndexState g_shadowfork_lazy_block_index;
+
+    bool IsShadowForkStartupCutLazyWindow()
+    {
+        return Params().GetConsensus(0).fShadowForkMode &&
+            GetBoolArg("-shadowforkstartupcut", true) &&
+            g_shadowfork_lazy_block_index.enabled &&
+            g_shadowfork_lazy_block_index.active_tip_height == g_shadowfork_lazy_block_index.eager_base_height;
+    }
+
+    bool IsBelowShadowForkStartupCutWindow(int height)
+    {
+        return IsShadowForkStartupCutLazyWindow() &&
+            height >= 0 &&
+            height < g_shadowfork_lazy_block_index.eager_base_height;
     }
 
     struct CBlockIndexWorkComparator
@@ -228,15 +283,32 @@ public:
 
 CBlockIndex* FindForkInGlobalIndex(const CChain& chain, const CBlockLocator& locator)
 {
+    LOCK(cs_main);
+
     // Find the first block the caller has in the main chain
     BOOST_FOREACH(const uint256& hash, locator.vHave) {
+        CBlockIndex* pindex = NULL;
         BlockMap::iterator mi = mapBlockIndex.find(hash);
-        if (mi != mapBlockIndex.end())
+        if (mi != mapBlockIndex.end()) {
+            pindex = (*mi).second;
+        } else if (g_shadowfork_lazy_block_index.enabled) {
+            pindex = LookupBlockIndex(hash);
+        }
+
+        if (pindex != NULL)
         {
-            CBlockIndex* pindex = (*mi).second;
-            if (chain.Contains(pindex))
+            if (chain.Contains(pindex)) {
                 return pindex;
-            if (pindex->GetAncestor(chain.Height()) == chain.Tip()) {
+            }
+
+            if (g_shadowfork_lazy_block_index.enabled) {
+                CBlockIndex* pactive = LoadShadowForkActiveChainIndex(pindex->nHeight);
+                if (pactive != NULL && pactive->GetBlockHash() == pindex->GetBlockHash()) {
+                    return pindex;
+                }
+            }
+
+            if (pindex->nHeight <= chain.Height() && pindex->GetAncestor(chain.Height()) == chain.Tip()) {
                 return chain.Tip();
             }
         }
@@ -468,7 +540,23 @@ bool CheckSequenceLocks(const CTransaction &tx, int flags, LockPoints* lp, bool 
                     maxInputHeight = std::max(maxInputHeight, height);
                 }
             }
-            lp->maxInputBlock = tip->GetAncestor(maxInputHeight);
+            // If no relative lock-time constraints survived CalculateSequenceLocks()
+            // then these LockPoints do not depend on any historical block. Avoid
+            // asking lazy shadowfork indexes to materialize the genesis ancestor
+            // for version-2 transactions whose sequences disable BIP68.
+            if (lockPair.first == -1 && lockPair.second == -1) {
+                lp->maxInputBlock = NULL;
+            } else if (IsBelowShadowForkStartupCutWindow(maxInputHeight)) {
+                // Shadowfork prepared volumes can contain very old inherited
+                // UTXOs. Caching a lockpoint for those inputs forces lazy
+                // materialization of a deep source-chain ancestor while
+                // holding cs_main, which blocks all RPC workers. Returning a
+                // null lockpoint keeps the mempool check conservative without
+                // hydrating historical block-index ranges.
+                lp->maxInputBlock = NULL;
+            } else {
+                lp->maxInputBlock = tip->GetAncestor(maxInputHeight);
+            }
         }
     }
     return EvaluateSequenceLocks(index, lockPair);
@@ -1188,8 +1276,11 @@ static bool ReadBlockOrHeader(T& block, const CDiskBlockPos& pos, const Consensu
         return error("%s: Deserialize or I/O error - %s at %s", __func__, e.what(), pos.ToString());
     }
 
+    // Shadowfork instant-mined blocks do not satisfy canonical PoW checks.
+    const bool fSkipShadowForkPow = IsShadowForkInstantMiningEnabled(consensusParams);
+
     // Check the header
-    if (fCheckPOW && !CheckAuxPowProofOfWork(block, consensusParams))
+    if (fCheckPOW && !fSkipShadowForkPow && !CheckAuxPowProofOfWork(block, consensusParams))
         return error("ReadBlockFromDisk: Errors in block header at %s", pos.ToString());
 
     return true;
@@ -1817,7 +1908,8 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     // is enforced in ContextualCheckBlockHeader(); we wouldn't want to
     // re-enforce that rule here (at least until we make it impossible for
     // GetAdjustedTime() to go backward).
-    if (!CheckBlock(block, state, !fJustCheck, !fJustCheck)) {
+    const bool fCheckPOW = !fJustCheck && !IsShadowForkInstantMiningEnabled(consensus);
+    if (!CheckBlock(block, state, fCheckPOW, !fJustCheck)) {
         if (state.CorruptionPossible()) {
             LogPrintf("%s: Attempt to connect corrupted block %s.\n", __func__, block.GetHash().ToString());
             // We don't write down blocks to disk if they may have been
@@ -1890,9 +1982,16 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     // before the first had been spent.  Since those coinbases are sufficiently buried its no longer possible to create further
     // duplicate transactions descending from the known pairs either.
     // If we're on the known chain at height greater than where BIP34 activated, we can save the db accesses needed for the BIP30 check.
-    CBlockIndex *pindexBIP34height = pindex->pprev->GetAncestor(chainparams.GetConsensus(0).BIP34Height);
-    //Only continue to enforce if we're below BIP34 activation height or the block hash at that height doesn't correspond.
-    fEnforceBIP30 = fEnforceBIP30 && (!pindexBIP34height || !(pindexBIP34height->GetBlockHash() == chainparams.GetConsensus(0).BIP34Hash));
+    if (chainparams.GetConsensus(0).fShadowForkMode) {
+        // Shadow forks inherit an already-validated post-BIP34 chain and only
+        // append new local blocks. Avoid forcing a deep historical ancestor load
+        // just to prove the inherited chain reached the known BIP34 checkpoint.
+        fEnforceBIP30 = false;
+    } else {
+        CBlockIndex *pindexBIP34height = pindex->pprev->GetAncestor(chainparams.GetConsensus(0).BIP34Height);
+        //Only continue to enforce if we're below BIP34 activation height or the block hash at that height doesn't correspond.
+        fEnforceBIP30 = fEnforceBIP30 && (!pindexBIP34height || !(pindexBIP34height->GetBlockHash() == chainparams.GetConsensus(0).BIP34Hash));
+    }
 
     if (fEnforceBIP30) {
         for (const auto& tx : block.vtx) {
@@ -2270,6 +2369,11 @@ bool static DisconnectTip(CValidationState& state, const CChainParams& chainpara
 {
     CBlockIndex *pindexDelete = chainActive.Tip();
     assert(pindexDelete);
+    if (pindexDelete->pprev == NULL && pindexDelete->nHeight > 0 &&
+        !EnsureShadowForkActiveChainParentLoaded(pindexDelete, true)) {
+        return error("DisconnectTip(): failed to load parent for %s at height %d",
+            pindexDelete->GetBlockHash().ToString(), pindexDelete->nHeight);
+    }
     // Read block from disk.
     CBlock block;
     if (!ReadBlockFromDisk(block, pindexDelete, chainparams.GetConsensus(chainActive.Height())))
@@ -2800,10 +2904,10 @@ CBlockIndex* AddToBlockIndex(const CBlockHeader& block)
     pindexNew->nSequenceId = 0;
     BlockMap::iterator mi = mapBlockIndex.insert(std::make_pair(hash, pindexNew)).first;
     pindexNew->phashBlock = &((*mi).first);
-    BlockMap::iterator miPrev = mapBlockIndex.find(block.hashPrevBlock);
-    if (miPrev != mapBlockIndex.end())
+    CBlockIndex* pprev = LookupBlockIndex(block.hashPrevBlock);
+    if (pprev != NULL)
     {
-        pindexNew->pprev = (*miPrev).second;
+        pindexNew->pprev = pprev;
         pindexNew->nHeight = pindexNew->pprev->nHeight + 1;
         pindexNew->BuildSkip();
     }
@@ -2962,8 +3066,7 @@ bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, bool f
     // knowing the previous block), but that's okay, as the checks done are permissive
     // (i.e. doesn't check work limit or whether AuxPoW is enabled)
     const Consensus::Params& consensus = Params().GetConsensus(0);
-    const bool fSkipShadowForkPow = consensus.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true);
-    if (fCheckPOW && !fSkipShadowForkPow && !CheckAuxPowProofOfWork(block, consensus))
+    if (fCheckPOW && !CheckAuxPowProofOfWork(block, consensus))
         return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
 
     return true;
@@ -3241,7 +3344,7 @@ bool ContextualCheckBlock(const CBlock& block, CValidationState& state, const CB
     return true;
 }
 
-static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex)
+static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool fCheckPOW = true)
 {
     AssertLockHeld(cs_main);
     // Check for duplicate
@@ -3260,7 +3363,7 @@ static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state
             return true;
         }
 
-        if (!CheckBlockHeader(block, state))
+        if (!CheckBlockHeader(block, state, fCheckPOW))
             return error("%s: Consensus::CheckBlockHeader: %s, %s", __func__, hash.ToString(), FormatStateMessage(state));
 
         // Get prev block index
@@ -3325,7 +3428,7 @@ bool ProcessNewBlockHeaders(const std::vector<CBlockHeader>& headers, CValidatio
 }
 
 /** Store block on disk. If dbp is non-NULL, the file is known to already reside on disk */
-static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool fRequested, const CDiskBlockPos* dbp, bool* fNewBlock)
+static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool fRequested, const CDiskBlockPos* dbp, bool* fNewBlock, bool fCheckPOW = true)
 {
     const CBlock& block = *pblock;
 
@@ -3335,7 +3438,7 @@ static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidation
     CBlockIndex *pindexDummy = NULL;
     CBlockIndex *&pindex = ppindex ? *ppindex : pindexDummy;
 
-    if (!AcceptBlockHeader(block, state, chainparams, &pindex))
+    if (!AcceptBlockHeader(block, state, chainparams, &pindex, fCheckPOW))
         return false;
 
     // Try to process all requested blocks that we don't have, but only
@@ -3365,7 +3468,7 @@ static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidation
     }
     if (fNewBlock) *fNewBlock = true;
 
-    if (!CheckBlock(block, state) ||
+    if (!CheckBlock(block, state, fCheckPOW) ||
         !ContextualCheckBlock(block, state, pindex->pprev)) {
         if (state.IsInvalid() && !state.CorruptionPossible()) {
             pindex->nStatus |= BLOCK_FAILED_VALID;
@@ -3404,19 +3507,7 @@ static bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidation
     return true;
 }
 
-static bool IsSuperMajority(int minVersion, const CBlockIndex* pstart, unsigned nRequired, const Consensus::Params& consensusParams)
-{
-    unsigned int nFound = 0;
-    for (int i = 0; i < consensusParams.nMajorityWindow && nFound < nRequired && pstart != NULL; i++)
-    {
-        if (pstart->GetBaseVersion() >= minVersion)
-            ++nFound;
-        pstart = pstart->pprev;
-    }
-    return (nFound >= nRequired);
-}
-
-bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool *fNewBlock)
+bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool *fNewBlock, bool fCheckPOW)
 {
     {
         CBlockIndex *pindex = NULL;
@@ -3424,13 +3515,13 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
         CValidationState state;
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
-        bool ret = CheckBlock(*pblock, state);
+        bool ret = CheckBlock(*pblock, state, fCheckPOW);
 
         LOCK(cs_main);
 
         if (ret) {
             // Store to disk
-            ret = AcceptBlock(pblock, state, chainparams, &pindex, fForceProcessing, NULL, fNewBlock);
+            ret = AcceptBlock(pblock, state, chainparams, &pindex, fForceProcessing, NULL, fNewBlock, fCheckPOW);
         }
         CheckBlockIndex(chainparams.GetConsensus(chainActive.Height()));
         if (!ret) {
@@ -3676,7 +3767,657 @@ CBlockIndex * InsertBlockIndex(uint256 hash)
     return pindexNew;
 }
 
-bool static LoadBlockIndexDB(const CChainParams& chainparams)
+static std::vector<std::pair<int, CBlockIndex*> > GetBlockIndexByHeight()
+{
+    std::vector<std::pair<int, CBlockIndex*> > vSortedByHeight;
+    vSortedByHeight.reserve(mapBlockIndex.size());
+    BOOST_FOREACH(const PAIRTYPE(uint256, CBlockIndex*)& item, mapBlockIndex)
+    {
+        CBlockIndex* pindex = item.second;
+        vSortedByHeight.push_back(std::make_pair(pindex->nHeight, pindex));
+    }
+    sort(vSortedByHeight.begin(), vSortedByHeight.end());
+    return vSortedByHeight;
+}
+
+static void TrackLoadedBlockIndexEntry(CBlockIndex* pindex, bool fShadowForkFastCandidates, bool fBuildSkip = true)
+{
+    if (pindex->nTx > 0) {
+        if (pindex->pprev && !pindex->pprev->nChainTx) {
+            mapBlocksUnlinked.insert(std::make_pair(pindex->pprev, pindex));
+        }
+        if (!(pindex->nStatus & BLOCK_FAILED_MASK) && pindex->pprev && (pindex->pprev->nStatus & BLOCK_FAILED_MASK)) {
+            LogPrintf("Invalid Block %s.\n", pindex->GetBlockHash().ToString());
+            pindex->nStatus |= BLOCK_FAILED_CHILD;
+            setDirtyBlockIndex.insert(pindex);
+        }
+    }
+    if (!fShadowForkFastCandidates && pindex->IsValid(BLOCK_VALID_TRANSACTIONS) && (pindex->nChainTx || pindex->pprev == NULL)) {
+        setBlockIndexCandidates.insert(pindex);
+    }
+    if (pindex->nStatus & BLOCK_FAILED_MASK && (!pindexBestInvalid || pindex->nChainWork > pindexBestInvalid->nChainWork)) {
+        pindexBestInvalid = pindex;
+    }
+    if (fBuildSkip && pindex->pprev) {
+        pindex->BuildSkip();
+    }
+    if (pindex->IsValid(BLOCK_VALID_TREE) && (pindexBestHeader == NULL || CBlockIndexWorkComparator()(pindexBestHeader, pindex))) {
+        pindexBestHeader = pindex;
+    }
+}
+
+static size_t RemoveLoadedBlockIndexEntriesAboveHeight(int height)
+{
+    std::vector<BlockMap::iterator> entries_to_remove;
+    for (BlockMap::iterator it = mapBlockIndex.begin(); it != mapBlockIndex.end(); ++it) {
+        if (it->second != NULL && it->second->nHeight > height) {
+            entries_to_remove.push_back(it);
+        }
+    }
+
+    for (std::vector<BlockMap::iterator>::iterator it = entries_to_remove.begin(); it != entries_to_remove.end(); ++it) {
+        CBlockIndex* pindex = (*it)->second;
+
+        setBlockIndexCandidates.erase(pindex);
+        setDirtyBlockIndex.erase(pindex);
+        gFailedBlocks.erase(pindex);
+        if (pindexBestInvalid == pindex) {
+            pindexBestInvalid = NULL;
+        }
+
+        for (std::multimap<CBlockIndex*, CBlockIndex*>::iterator linked_it = mapBlocksUnlinked.begin();
+             linked_it != mapBlocksUnlinked.end();) {
+            if (linked_it->first == pindex || linked_it->second == pindex) {
+                mapBlocksUnlinked.erase(linked_it++);
+            } else {
+                ++linked_it;
+            }
+        }
+
+        mapBlockIndex.erase(*it);
+        delete pindex;
+    }
+
+    return entries_to_remove.size();
+}
+
+static void LoadBlockTreeFlags()
+{
+    fHavePruned = false;
+    pblocktree->ReadFlag("prunedblockfiles", fHavePruned);
+    if (fHavePruned) {
+        LogPrintf("LoadBlockIndexDB(): Block files have previously been pruned\n");
+    }
+
+    bool fReindexing = false;
+    pblocktree->ReadReindexing(fReindexing);
+    fReindex |= fReindexing;
+
+    fTxIndex = false;
+    pblocktree->ReadFlag("txindex", fTxIndex);
+    LogPrintf("%s: transaction index %s\n", __func__, fTxIndex ? "enabled" : "disabled");
+}
+
+static bool LoadBlockFileInfoFromBlockTree()
+{
+    if (!pblocktree->ReadLastBlockFile(nLastBlockFile)) {
+        nLastBlockFile = 0;
+        vinfoBlockFile.clear();
+        vinfoBlockFile.resize(1);
+        return true;
+    }
+
+    vinfoBlockFile.clear();
+    vinfoBlockFile.resize(nLastBlockFile + 1);
+    LogPrintf("%s: last block file = %i\n", __func__, nLastBlockFile);
+    for (int nFile = 0; nFile <= nLastBlockFile; nFile++) {
+        pblocktree->ReadBlockFileInfo(nFile, vinfoBlockFile[nFile]);
+    }
+    if (!vinfoBlockFile.empty()) {
+        LogPrintf("%s: last block file info: %s\n", __func__, vinfoBlockFile[nLastBlockFile].ToString());
+    }
+    for (int nFile = nLastBlockFile + 1; true; nFile++) {
+        CBlockFileInfo info;
+        if (pblocktree->ReadBlockFileInfo(nFile, info)) {
+            vinfoBlockFile.push_back(info);
+        } else {
+            break;
+        }
+    }
+
+    return true;
+}
+
+static int GetShadowForkSnapshotWindowSize()
+{
+    const int configured = GetArg("-shadowforksnapshotwindow", DEFAULT_SHADOWFORK_SNAPSHOT_WINDOW);
+    return std::max(1, configured);
+}
+
+static int GetShadowForkActiveChainSegmentStart(int height)
+{
+    int start = std::max(0, height - SHADOWFORK_LAZY_ACTIVE_CHAIN_CHUNK + 1);
+    if (height >= g_shadowfork_lazy_block_index.eager_base_height) {
+        start = std::max(start, g_shadowfork_lazy_block_index.eager_base_height);
+    }
+    return start;
+}
+
+static bool TryLoadShadowForkActiveChainSegment(int height, bool fShadowForkFastCandidates);
+
+static bool GetShadowForkActiveChainRecordAtHeight(int height, ShadowForkActiveChainRecord* record, std::string* error)
+{
+    AssertLockHeld(cs_main);
+
+    if (!g_shadowfork_lazy_block_index.enabled) {
+        return false;
+    }
+    if (height < 0 || height > g_shadowfork_lazy_block_index.active_tip_height) {
+        return false;
+    }
+    if (height <= g_shadowfork_lazy_block_index.snapshot_tip_height) {
+        return g_shadowfork_lazy_block_index.reader->ReadActiveChainRecordAtHeight(height, *record, error);
+    }
+
+    const size_t delta_index = static_cast<size_t>(height - g_shadowfork_lazy_block_index.snapshot_tip_height - 1);
+    if (delta_index >= g_shadowfork_lazy_block_index.delta_records.size()) {
+        return false;
+    }
+    *record = g_shadowfork_lazy_block_index.delta_records[delta_index];
+    return true;
+}
+
+static bool PopulateShadowForkActiveChainEntry(int height, const ShadowForkActiveChainRecord& record, CBlockIndex* pprev, bool fShadowForkFastCandidates, CBlockIndex** ppindex)
+{
+    CDiskBlockIndex diskindex;
+    if (!pblocktree->ReadBlockIndex(record.block_hash, diskindex)) {
+        LogPrintf("PopulateShadowForkActiveChainEntry(): failed to read blocks/index entry for %s at height %d\n",
+            record.block_hash.ToString(), height);
+        return false;
+    }
+    if (diskindex.nHeight != height) {
+        LogPrintf("PopulateShadowForkActiveChainEntry(): height mismatch for %s (%d != %d)\n",
+            record.block_hash.ToString(), diskindex.nHeight, height);
+        return false;
+    }
+    if ((height == 0 && !diskindex.hashPrev.IsNull()) ||
+        (height > 0 && pprev != NULL && diskindex.hashPrev != pprev->GetBlockHash())) {
+        LogPrintf("PopulateShadowForkActiveChainEntry(): parent mismatch for %s at height %d\n",
+            record.block_hash.ToString(), height);
+        return false;
+    }
+
+    CBlockIndex* pindex = InsertBlockIndex(record.block_hash);
+    pindex->pprev = pprev;
+    pindex->nHeight = diskindex.nHeight;
+    pindex->nFile = diskindex.nFile;
+    pindex->nDataPos = diskindex.nDataPos;
+    pindex->nUndoPos = diskindex.nUndoPos;
+    pindex->nVersion = diskindex.nVersion;
+    pindex->hashMerkleRoot = diskindex.hashMerkleRoot;
+    pindex->nTime = diskindex.nTime;
+    pindex->nBits = diskindex.nBits;
+    pindex->nNonce = diskindex.nNonce;
+    pindex->nStatus = diskindex.nStatus;
+    pindex->nTx = diskindex.nTx;
+    pindex->nChainWork = UintToArith256(record.chain_work);
+    pindex->nChainTx = record.chain_tx_count;
+    pindex->nTimeMax = record.time_max;
+
+    // Lazy shadowfork snapshot loading must not recurse through BuildSkip(),
+    // because missing ancestors are populated on demand and recursive backfill
+    // here can blow the stack.
+    TrackLoadedBlockIndexEntry(pindex, fShadowForkFastCandidates, false);
+    *ppindex = pindex;
+    return true;
+}
+
+static bool PopulateShadowForkDiskIndexEntry(const CDiskBlockIndex& diskindex, CBlockIndex* pprev, bool fShadowForkFastCandidates, CBlockIndex** ppindex)
+{
+    const uint256 block_hash = diskindex.GetBlockHash();
+    if (block_hash.IsNull()) {
+        LogPrintf("PopulateShadowForkDiskIndexEntry(): null block hash at height %d\n", diskindex.nHeight);
+        return false;
+    }
+    if ((diskindex.nHeight == 0 && !diskindex.hashPrev.IsNull()) ||
+        (diskindex.nHeight > 0 &&
+         (pprev == NULL || diskindex.hashPrev != pprev->GetBlockHash()))) {
+        LogPrintf("PopulateShadowForkDiskIndexEntry(): parent mismatch for %s at height %d\n",
+            block_hash.ToString(), diskindex.nHeight);
+        return false;
+    }
+
+    CBlockIndex* pindex = InsertBlockIndex(block_hash);
+    pindex->pprev = pprev;
+    pindex->nHeight = diskindex.nHeight;
+    pindex->nFile = diskindex.nFile;
+    pindex->nDataPos = diskindex.nDataPos;
+    pindex->nUndoPos = diskindex.nUndoPos;
+    pindex->nVersion = diskindex.nVersion;
+    pindex->hashMerkleRoot = diskindex.hashMerkleRoot;
+    pindex->nTime = diskindex.nTime;
+    pindex->nBits = diskindex.nBits;
+    pindex->nNonce = diskindex.nNonce;
+    pindex->nStatus = diskindex.nStatus;
+    pindex->nTx = diskindex.nTx;
+    pindex->nChainWork = diskindex.nChainWork;
+    pindex->nChainTx = diskindex.nChainTx;
+    pindex->nTimeMax = diskindex.nTimeMax;
+
+    TrackLoadedBlockIndexEntry(pindex, fShadowForkFastCandidates, false);
+    *ppindex = pindex;
+    return true;
+}
+
+static bool EnsureShadowForkActiveChainParentLoaded(CBlockIndex* pindex, bool fShadowForkFastCandidates)
+{
+    if (!g_shadowfork_lazy_block_index.enabled || pindex == NULL || pindex->nHeight <= 0 || pindex->pprev != NULL) {
+        return true;
+    }
+
+    if (!TryLoadShadowForkActiveChainSegment(pindex->nHeight - 1, fShadowForkFastCandidates)) {
+        return false;
+    }
+
+    std::string snapshot_error;
+    ShadowForkActiveChainRecord prev_record;
+    if (!GetShadowForkActiveChainRecordAtHeight(pindex->nHeight - 1, &prev_record, &snapshot_error)) {
+        LogPrintf("EnsureShadowForkActiveChainParentLoaded(): failed to read snapshot height %d: %s\n",
+            pindex->nHeight - 1, snapshot_error);
+        return false;
+    }
+
+    BlockMap::iterator prev_it = mapBlockIndex.find(prev_record.block_hash);
+    if (prev_it == mapBlockIndex.end()) {
+        LogPrintf("EnsureShadowForkActiveChainParentLoaded(): previous active-chain block %s missing at height %d\n",
+            prev_record.block_hash.ToString(), pindex->nHeight - 1);
+        return false;
+    }
+
+    pindex->pprev = prev_it->second;
+    return true;
+}
+
+static bool TryLoadShadowForkActiveChainSegment(int height, bool fShadowForkFastCandidates)
+{
+    AssertLockHeld(cs_main);
+
+    if (!g_shadowfork_lazy_block_index.enabled || height < 0 || height > g_shadowfork_lazy_block_index.active_tip_height) {
+        return false;
+    }
+
+    std::string snapshot_error;
+    ShadowForkActiveChainRecord height_record;
+    if (!GetShadowForkActiveChainRecordAtHeight(height, &height_record, &snapshot_error)) {
+        LogPrintf("TryLoadShadowForkActiveChainSegment(): failed to read snapshot height %d: %s\n", height, snapshot_error);
+        return false;
+    }
+
+    BlockMap::iterator existing_tip = mapBlockIndex.find(height_record.block_hash);
+    if (existing_tip != mapBlockIndex.end()) {
+        if (!EnsureShadowForkActiveChainParentLoaded(existing_tip->second, fShadowForkFastCandidates)) {
+            return false;
+        }
+        return true;
+    }
+
+    const int start = GetShadowForkActiveChainSegmentStart(height);
+    CBlockIndex* pprev = NULL;
+    if (start > 0) {
+        ShadowForkActiveChainRecord prev_record;
+        if (!GetShadowForkActiveChainRecordAtHeight(start - 1, &prev_record, &snapshot_error)) {
+            LogPrintf("TryLoadShadowForkActiveChainSegment(): failed to read snapshot height %d: %s\n", start - 1, snapshot_error);
+            return false;
+        }
+
+        BlockMap::iterator prev_it = mapBlockIndex.find(prev_record.block_hash);
+        if (prev_it != mapBlockIndex.end()) {
+            pprev = prev_it->second;
+        }
+    }
+
+    for (int cursor = start; cursor <= height; ++cursor) {
+        ShadowForkActiveChainRecord record;
+        if (!GetShadowForkActiveChainRecordAtHeight(cursor, &record, &snapshot_error)) {
+            LogPrintf("TryLoadShadowForkActiveChainSegment(): failed to read snapshot height %d: %s\n", cursor, snapshot_error);
+            return false;
+        }
+
+        BlockMap::iterator it = mapBlockIndex.find(record.block_hash);
+        if (it != mapBlockIndex.end()) {
+            if (!EnsureShadowForkActiveChainParentLoaded(it->second, fShadowForkFastCandidates)) {
+                return false;
+            }
+            pprev = it->second;
+            continue;
+        }
+
+        CBlockIndex* pindex = NULL;
+        if (!PopulateShadowForkActiveChainEntry(cursor, record, pprev, fShadowForkFastCandidates, &pindex)) {
+            return false;
+        }
+        pprev = pindex;
+    }
+
+    return true;
+}
+
+CBlockIndex* LoadShadowForkActiveChainIndex(int nHeight)
+{
+    AssertLockHeld(cs_main);
+
+    if (!g_shadowfork_lazy_block_index.enabled) {
+        return NULL;
+    }
+    if (!TryLoadShadowForkActiveChainSegment(nHeight, true)) {
+        return NULL;
+    }
+
+    std::string snapshot_error;
+    ShadowForkActiveChainRecord record;
+    if (!GetShadowForkActiveChainRecordAtHeight(nHeight, &record, &snapshot_error)) {
+        return NULL;
+    }
+    BlockMap::iterator it = mapBlockIndex.find(record.block_hash);
+    if (it == mapBlockIndex.end()) {
+        return NULL;
+    }
+    if (!EnsureShadowForkActiveChainParentLoaded(it->second, true)) {
+        return NULL;
+    }
+    return it->second;
+}
+
+CBlockIndex* LookupBlockIndex(const uint256& hash)
+{
+    AssertLockHeld(cs_main);
+
+    BlockMap::iterator it = mapBlockIndex.find(hash);
+    if (it != mapBlockIndex.end()) {
+        return it->second;
+    }
+    if (!g_shadowfork_lazy_block_index.enabled) {
+        return NULL;
+    }
+
+    CDiskBlockIndex diskindex;
+    if (!pblocktree->ReadBlockIndex(hash, diskindex)) {
+        return NULL;
+    }
+
+    if (diskindex.nHeight > g_shadowfork_lazy_block_index.active_tip_height) {
+        return NULL;
+    }
+
+    ShadowForkActiveChainRecord record;
+    std::string snapshot_error;
+    if (GetShadowForkActiveChainRecordAtHeight(diskindex.nHeight, &record, &snapshot_error) &&
+        record.block_hash == hash) {
+        if (!TryLoadShadowForkActiveChainSegment(diskindex.nHeight, true)) {
+            return NULL;
+        }
+
+        it = mapBlockIndex.find(hash);
+        return it == mapBlockIndex.end() ? NULL : it->second;
+    }
+
+    // In lazy shadowfork mode, do not recursively materialize arbitrary
+    // non-active historical branches. Wallet RPCs call LookupBlockIndex while
+    // holding cs_main to compute transaction depth; hydrating a stale branch
+    // from blocks/index can load millions of ancestors and wedge every RPC
+    // worker behind the same lock. Active-chain hashes are handled above, and
+    // newly mined shadowfork blocks are already present in mapBlockIndex.
+    if (Params().GetConsensus(0).fShadowForkMode) {
+        return NULL;
+    }
+
+    CBlockIndex* pprev = NULL;
+    if (!diskindex.hashPrev.IsNull()) {
+        pprev = LookupBlockIndex(diskindex.hashPrev);
+        if (pprev == NULL) {
+            return NULL;
+        }
+    }
+
+    CBlockIndex* pindex = NULL;
+    if (!PopulateShadowForkDiskIndexEntry(diskindex, pprev, false, &pindex)) {
+        return NULL;
+    }
+    return pindex;
+}
+
+CBlockIndex* FindLoadedBlockIndex(const uint256& hash)
+{
+    AssertLockHeld(cs_main);
+
+    BlockMap::iterator it = mapBlockIndex.find(hash);
+    return it == mapBlockIndex.end() ? NULL : it->second;
+}
+
+static bool TryLoadShadowForkSnapshot(const CChainParams& chainparams)
+{
+    const bool fShadowForkFastCandidates =
+        IsShadowForkOptimizationEnabled(chainparams, "-shadowforkfastblockindexcandidates");
+
+    if (!chainparams.GetConsensus(0).fShadowForkMode || !GetBoolArg("-shadowforkusesnapshot", true)) {
+        return false;
+    }
+    LOCK(cs_main);
+
+    bool fReindexing = false;
+    pblocktree->ReadReindexing(fReindexing);
+    if (fReindexing) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot disabled because blocks/index is mid-reindex\n");
+        return false;
+    }
+
+    const std::string source_chain = GetShadowForkSnapshotSourceChain(chainparams);
+    const uint256 chainstate_best_block = pcoinsTip->GetBestBlock();
+    if (chainstate_best_block.IsNull()) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot disabled because chainstate best block is null\n");
+        return false;
+    }
+
+    ShadowForkSnapshotReader reader;
+    ShadowForkSnapshotMetadata metadata;
+    std::string snapshot_error;
+    if (!reader.Open(source_chain, &snapshot_error)) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot unavailable: %s; falling back to blocks/index scan\n", snapshot_error);
+        return false;
+    }
+    if (!reader.ReadMetadata(metadata, &snapshot_error)) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot metadata invalid: %s; falling back to blocks/index scan\n", snapshot_error);
+        return false;
+    }
+    if (metadata.source_chain != source_chain) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot source mismatch (%s != %s); falling back to blocks/index scan\n",
+            metadata.source_chain, source_chain);
+        return false;
+    }
+    if (metadata.genesis_hash != chainparams.GetConsensus(0).hashGenesisBlock) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot genesis mismatch; falling back to blocks/index scan\n");
+        return false;
+    }
+    if (metadata.block_count == 0 || metadata.active_tip_hash.IsNull() || metadata.active_tip_height < 0) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot metadata is incomplete; falling back to blocks/index scan\n");
+        return false;
+    }
+    if (metadata.block_count != static_cast<uint64_t>(metadata.active_tip_height) + 1) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot height/count mismatch; falling back to blocks/index scan\n");
+        return false;
+    }
+    if (metadata.block_file_info.size() < static_cast<size_t>(metadata.last_block_file + 1)) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot block-file metadata is inconsistent; falling back to blocks/index scan\n");
+        return false;
+    }
+
+    uint256 best_block = chainstate_best_block;
+    int startup_cut_height = -1;
+    ShadowForkActiveChainRecord startup_cut_record;
+    if (GetBoolArg("-shadowforkstartupcut", true) && IsArgSet("-shadowfork")) {
+        const int64_t requested_height = GetArg("-shadowfork", -1);
+        if (requested_height >= 0 && requested_height <= metadata.active_tip_height) {
+            if (!reader.ReadActiveChainRecordAtHeight(static_cast<int>(requested_height), startup_cut_record, &snapshot_error)) {
+                LogPrintf("LoadBlockIndexDB(): shadowfork startup-cut snapshot lookup failed at height %d: %s; falling back to blocks/index scan\n",
+                    static_cast<int>(requested_height), snapshot_error);
+                return false;
+            }
+            startup_cut_height = static_cast<int>(requested_height);
+            LogPrintf("LoadBlockIndexDB(): shadowfork startup cut height %d is covered by snapshot tip height %d; loading chainstate best %s before rollback\n",
+                startup_cut_height, metadata.active_tip_height, chainstate_best_block.ToString());
+        }
+    }
+
+    ShadowForkActiveChainRecord snapshot_tip_record;
+    if (!reader.ReadActiveChainRecordAtHeight(metadata.active_tip_height, snapshot_tip_record, &snapshot_error)) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot tip read failed: %s; falling back to blocks/index scan\n", snapshot_error);
+        return false;
+    }
+    if (snapshot_tip_record.block_hash != metadata.active_tip_hash) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot tip hash mismatch; falling back to blocks/index scan\n");
+        return false;
+    }
+
+    const int64_t nSnapshotStart = GetTimeMillis();
+    const bool oldHavePruned = fHavePruned;
+    const bool oldTxIndex = fTxIndex;
+    const int oldLastBlockFile = nLastBlockFile;
+    const std::vector<CBlockFileInfo> oldBlockFileInfo = vinfoBlockFile;
+    const auto restore_snapshot_globals = [&]() {
+        fHavePruned = oldHavePruned;
+        fTxIndex = oldTxIndex;
+        nLastBlockFile = oldLastBlockFile;
+        vinfoBlockFile = oldBlockFileInfo;
+    };
+    fHavePruned = metadata.have_pruned;
+    fTxIndex = metadata.tx_index;
+    nLastBlockFile = metadata.last_block_file;
+    vinfoBlockFile = metadata.block_file_info;
+    if (fHavePruned) {
+        LogPrintf("LoadBlockIndexDB(): Block files have previously been pruned\n");
+    }
+    LogPrintf("%s: transaction index %s\n", __func__, fTxIndex ? "enabled" : "disabled");
+    if (!vinfoBlockFile.empty()) {
+        LogPrintf("%s: last block file = %i\n", __func__, nLastBlockFile);
+        LogPrintf("%s: last block file info: %s\n", __func__, vinfoBlockFile[nLastBlockFile].ToString());
+    }
+
+    std::vector<CDiskBlockIndex> vDeltaBlocks;
+    if (best_block != metadata.active_tip_hash) {
+        uint256 cursor = best_block;
+        while (cursor != metadata.active_tip_hash) {
+            CDiskBlockIndex diskindex;
+            if (!pblocktree->ReadBlockIndex(cursor, diskindex)) {
+                LogPrintf("LoadBlockIndexDB(): shadowfork snapshot delta lookup failed at %s; falling back to blocks/index scan\n",
+                    cursor.ToString());
+                restore_snapshot_globals();
+                return false;
+            }
+            if (diskindex.nHeight <= metadata.active_tip_height) {
+                LogPrintf("LoadBlockIndexDB(): shadowfork snapshot tip is not an ancestor of current best block; falling back to blocks/index scan\n");
+                restore_snapshot_globals();
+                return false;
+            }
+            vDeltaBlocks.push_back(diskindex);
+            cursor = diskindex.hashPrev;
+            if (vDeltaBlocks.size() > 100000) {
+                LogPrintf("LoadBlockIndexDB(): shadowfork snapshot delta exceeded 100000 blocks; falling back to blocks/index scan\n");
+                restore_snapshot_globals();
+                return false;
+            }
+        }
+
+        std::reverse(vDeltaBlocks.begin(), vDeltaBlocks.end());
+        LoadBlockFileInfoFromBlockTree();
+        LoadBlockTreeFlags();
+    }
+
+    g_shadowfork_lazy_block_index.Reset();
+    g_shadowfork_lazy_block_index.source_chain = source_chain;
+    g_shadowfork_lazy_block_index.snapshot_tip_height = metadata.active_tip_height;
+    g_shadowfork_lazy_block_index.active_tip_height = metadata.active_tip_height + vDeltaBlocks.size();
+    g_shadowfork_lazy_block_index.eager_base_height =
+        std::max(0, g_shadowfork_lazy_block_index.active_tip_height - GetShadowForkSnapshotWindowSize() + 1);
+    g_shadowfork_lazy_block_index.fast_candidates = fShadowForkFastCandidates;
+    g_shadowfork_lazy_block_index.reader.reset(new ShadowForkSnapshotReader());
+    if (!g_shadowfork_lazy_block_index.reader->Open(source_chain, &snapshot_error) ||
+        !g_shadowfork_lazy_block_index.reader->ReadMetadata(metadata, &snapshot_error)) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot reopen failed: %s; falling back to blocks/index scan\n", snapshot_error);
+        g_shadowfork_lazy_block_index.Reset();
+        restore_snapshot_globals();
+        return false;
+    }
+
+    arith_uint256 chain_work = UintToArith256(snapshot_tip_record.chain_work);
+    uint32_t chain_tx_count = snapshot_tip_record.chain_tx_count;
+    uint32_t time_max = snapshot_tip_record.time_max;
+    for (std::vector<CDiskBlockIndex>::const_iterator it = vDeltaBlocks.begin(); it != vDeltaBlocks.end(); ++it) {
+        ShadowForkActiveChainRecord delta_record;
+        delta_record.block_hash = it->GetBlockHash();
+        chain_work += GetBlockProof(*it);
+        delta_record.chain_work = ArithToUint256(chain_work);
+        if (it->nTx > 0) {
+            chain_tx_count += it->nTx;
+        }
+        delta_record.chain_tx_count = chain_tx_count;
+        time_max = std::max<uint32_t>(time_max, it->nTime);
+        delta_record.time_max = time_max;
+        g_shadowfork_lazy_block_index.delta_records.push_back(delta_record);
+    }
+    g_shadowfork_lazy_block_index.enabled = true;
+
+    // Keep genesis materialized even in lazy mode. Later startup checks assume
+    // the loaded block index contains the network genesis hash.
+    if (!TryLoadShadowForkActiveChainSegment(0, fShadowForkFastCandidates)) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot failed to materialize genesis; falling back to blocks/index scan\n");
+        g_shadowfork_lazy_block_index.Reset();
+        restore_snapshot_globals();
+        return false;
+    }
+
+    for (int chunk_end = g_shadowfork_lazy_block_index.eager_base_height;
+         chunk_end <= g_shadowfork_lazy_block_index.active_tip_height;
+         chunk_end += SHADOWFORK_LAZY_ACTIVE_CHAIN_CHUNK) {
+        const int target_height = std::min(g_shadowfork_lazy_block_index.active_tip_height,
+            chunk_end + SHADOWFORK_LAZY_ACTIVE_CHAIN_CHUNK - 1);
+        if (!TryLoadShadowForkActiveChainSegment(target_height, fShadowForkFastCandidates)) {
+            LogPrintf("LoadBlockIndexDB(): shadowfork snapshot eager load failed at height %d; falling back to blocks/index scan\n",
+                target_height);
+            g_shadowfork_lazy_block_index.Reset();
+            restore_snapshot_globals();
+            return false;
+        }
+    }
+
+    CBlockIndex* pbest = LookupBlockIndex(best_block);
+    if (pbest == NULL) {
+        LogPrintf("LoadBlockIndexDB(): shadowfork snapshot load did not reconstruct the current best block; falling back to blocks/index scan\n");
+        g_shadowfork_lazy_block_index.Reset();
+        restore_snapshot_globals();
+        return false;
+    }
+    chainActive.SetTipWindow(pbest, g_shadowfork_lazy_block_index.eager_base_height);
+
+    if (fShadowForkFastCandidates) {
+        setBlockIndexCandidates.insert(chainActive.Tip());
+        LogPrintf("%s: shadow fork snapshot fast candidates enabled; inserted active tip only\n", __func__);
+    } else {
+        PruneBlockIndexCandidates();
+    }
+
+    LogPrintf("%s: loaded shadowfork snapshot for %s in %dms (window_start=%d loaded=%d delta=%u shadowfork_fast_candidates=%d); hashBestChain=%s height=%d date=%s progress=%f\n",
+        __func__, source_chain, GetTimeMillis() - nSnapshotStart,
+        g_shadowfork_lazy_block_index.eager_base_height,
+        chainActive.Height() - g_shadowfork_lazy_block_index.eager_base_height + 1,
+        static_cast<unsigned int>(vDeltaBlocks.size()), fShadowForkFastCandidates,
+        chainActive.Tip()->GetBlockHash().ToString(), chainActive.Height(),
+        DateTimeStrFormat("%Y-%m-%d %H:%M:%S", chainActive.Tip()->GetBlockTime()),
+        GuessVerificationProgress(chainparams.TxData(), chainActive.Tip()));
+
+    return true;
+}
+
+bool static LoadBlockIndexDBFromLevelDB(const CChainParams& chainparams)
 {
     const int64_t nLoadStart = GetTimeMillis();
     const bool fShadowForkFastCandidates =
@@ -3691,14 +4432,7 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
 
     // Calculate nChainWork
     const int64_t nSortStart = GetTimeMillis();
-    std::vector<std::pair<int, CBlockIndex*> > vSortedByHeight;
-    vSortedByHeight.reserve(mapBlockIndex.size());
-    BOOST_FOREACH(const PAIRTYPE(uint256, CBlockIndex*)& item, mapBlockIndex)
-    {
-        CBlockIndex* pindex = item.second;
-        vSortedByHeight.push_back(std::make_pair(pindex->nHeight, pindex));
-    }
-    sort(vSortedByHeight.begin(), vSortedByHeight.end());
+    std::vector<std::pair<int, CBlockIndex*> > vSortedByHeight = GetBlockIndexByHeight();
     LogPrintf("%s: sorted block index by height in %dms\n",
         __func__, GetTimeMillis() - nSortStart);
 
@@ -3740,21 +4474,7 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
         __func__, GetTimeMillis() - nPostProcessStart, fShadowForkFastCandidates);
 
     // Load block file info
-    pblocktree->ReadLastBlockFile(nLastBlockFile);
-    vinfoBlockFile.resize(nLastBlockFile + 1);
-    LogPrintf("%s: last block file = %i\n", __func__, nLastBlockFile);
-    for (int nFile = 0; nFile <= nLastBlockFile; nFile++) {
-        pblocktree->ReadBlockFileInfo(nFile, vinfoBlockFile[nFile]);
-    }
-    LogPrintf("%s: last block file info: %s\n", __func__, vinfoBlockFile[nLastBlockFile].ToString());
-    for (int nFile = nLastBlockFile + 1; true; nFile++) {
-        CBlockFileInfo info;
-        if (pblocktree->ReadBlockFileInfo(nFile, info)) {
-            vinfoBlockFile.push_back(info);
-        } else {
-            break;
-        }
-    }
+    LoadBlockFileInfoFromBlockTree();
 
     // Check presence of blk files
     LogPrintf("Checking all blk files are present...\n");
@@ -3774,19 +4494,7 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
         }
     }
 
-    // Check whether we have ever pruned block & undo files
-    pblocktree->ReadFlag("prunedblockfiles", fHavePruned);
-    if (fHavePruned)
-        LogPrintf("LoadBlockIndexDB(): Block files have previously been pruned\n");
-
-    // Check whether we need to continue reindexing
-    bool fReindexing = false;
-    pblocktree->ReadReindexing(fReindexing);
-    fReindex |= fReindexing;
-
-    // Check whether we have a transaction index
-    pblocktree->ReadFlag("txindex", fTxIndex);
-    LogPrintf("%s: transaction index %s\n", __func__, fTxIndex ? "enabled" : "disabled");
+    LoadBlockTreeFlags();
 
     // Load pointer to end of best chain
     BlockMap::iterator it = mapBlockIndex.find(pcoinsTip->GetBestBlock());
@@ -3807,6 +4515,16 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
         GuessVerificationProgress(chainparams.TxData(), chainActive.Tip()));
 
     return true;
+}
+
+bool static LoadBlockIndexDB(const CChainParams& chainparams)
+{
+    if (TryLoadShadowForkSnapshot(chainparams)) {
+        return true;
+    }
+
+    UnloadBlockIndex();
+    return LoadBlockIndexDBFromLevelDB(chainparams);
 }
 
 CVerifyDB::CVerifyDB()
@@ -3861,7 +4579,8 @@ bool CVerifyDB::VerifyDB(const CChainParams& chainparams, CCoinsView *coinsview,
         if (!ReadBlockFromDisk(block, pindex, chainparams.GetConsensus(pindex->nHeight)))
             return error("VerifyDB(): *** ReadBlockFromDisk failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
         // check level 1: verify block validity
-        if (nCheckLevel >= 1 && !CheckBlock(block, state))
+        const bool fVerifyPOW = !IsShadowForkInstantMiningEnabled(chainparams.GetConsensus(pindex->nHeight));
+        if (nCheckLevel >= 1 && !CheckBlock(block, state, fVerifyPOW))
             return error("%s: *** found bad block at %d, hash=%s (%s)\n", __func__,
                          pindex->nHeight, pindex->GetBlockHash().ToString(), FormatStateMessage(state));
         // check level 2: verify undo validity
@@ -4029,6 +4748,7 @@ void UnloadBlockIndex()
     }
     mapBlockIndex.clear();
     fHavePruned = false;
+    g_shadowfork_lazy_block_index.Reset();
 }
 
 bool LoadBlockIndex(const CChainParams& chainparams)
@@ -4036,6 +4756,171 @@ bool LoadBlockIndex(const CChainParams& chainparams)
     // Load block index from databases
     if (!fReindex && !LoadBlockIndexDB(chainparams))
         return false;
+    return true;
+}
+
+bool ApplyShadowForkStartupCut(const CChainParams& chainparams)
+{
+    LOCK(cs_main);
+
+    if (!chainparams.GetConsensus(0).fShadowForkMode ||
+        !GetBoolArg("-shadowforkstartupcut", true) ||
+        !IsArgSet("-shadowfork")) {
+        return true;
+    }
+
+    const int64_t requested_height = GetArg("-shadowfork", -1);
+    if (requested_height <= 0) {
+        LogPrintf("%s: no requested positive shadow fork height; keeping loaded source tip height=%d\n",
+            __func__, chainActive.Height());
+        return true;
+    }
+    if (chainActive.Tip() == NULL) {
+        return error("%s: chainActive tip is null", __func__);
+    }
+    if (pcoinsTip == NULL) {
+        return error("%s: coins tip is null", __func__);
+    }
+    if (requested_height > chainActive.Height()) {
+        return error("%s: requested shadow fork height %d is above loaded source height %d",
+            __func__, requested_height, chainActive.Height());
+    }
+
+    CBlockIndex* target = chainActive[static_cast<int>(requested_height)];
+    if (target == NULL) {
+        return error("%s: failed to load active-chain entry at requested shadow fork height %d",
+            __func__, requested_height);
+    }
+
+    const int loaded_height = chainActive.Height();
+    const uint256 loaded_hash = chainActive.Tip()->GetBlockHash();
+    const uint256 old_coins_best = pcoinsTip->GetBestBlock();
+    if (requested_height == loaded_height) {
+        if (old_coins_best != target->GetBlockHash()) {
+            return error("%s: active tip already at requested height %d but coins best is %s, expected %s; refusing unsafe shadow fork cut",
+                __func__, requested_height, old_coins_best.ToString(), target->GetBlockHash().ToString());
+        }
+        LogPrintf("%s: loaded source tip already matches requested shadow fork height %d (%s)\n",
+            __func__, requested_height, target->GetBlockHash().ToString());
+        return true;
+    }
+
+    CValidationState state;
+    int disconnected = 0;
+    while (chainActive.Height() > requested_height) {
+        if (!DisconnectTip(state, chainparams, true)) {
+            mempool.removeForReorg(pcoinsTip, chainActive.Height() + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
+            return error("%s: failed to disconnect inherited source block while rolling back from height %d to %d",
+                __func__, loaded_height, requested_height);
+        }
+        ++disconnected;
+    }
+
+    target = chainActive.Tip();
+    if (target == NULL || target->nHeight != requested_height) {
+        return error("%s: rollback ended at height %d, expected %d",
+            __func__, target ? target->nHeight : -1, requested_height);
+    }
+    if (pcoinsTip->GetBestBlock() != target->GetBlockHash()) {
+        return error("%s: rollback ended with coins best %s, expected %s",
+            __func__, pcoinsTip->GetBestBlock().ToString(), target->GetBlockHash().ToString());
+    }
+    if (disconnected > 0) {
+        mempool.removeForReorg(pcoinsTip, chainActive.Height() + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
+    }
+    if (!FlushStateToDisk(state, FLUSH_STATE_ALWAYS)) {
+        return error("%s: failed to flush chainstate after shadow fork rollback", __func__);
+    }
+
+    pindexBestHeader = target;
+    if (g_shadowfork_lazy_block_index.enabled) {
+        // The prepared-volume snapshot may have been loaded at the source tip.
+        // After a startup cut, on-demand active-chain lookups must treat the
+        // requested fork height as the active ceiling; otherwise wallet locators
+        // or other lazy lookups can rediscover the inherited source tip.
+        g_shadowfork_lazy_block_index.active_tip_height = target->nHeight;
+        g_shadowfork_lazy_block_index.eager_base_height = target->nHeight;
+    }
+    const size_t removed_above_cut = RemoveLoadedBlockIndexEntriesAboveHeight(target->nHeight);
+
+    // Keep future source-chain blocks out of ActivateBestChain after the cut.
+    // Shadowfork instances mine from the requested height; they should not
+    // select the inherited source tip again just because it has more work.
+    setBlockIndexCandidates.clear();
+    setBlockIndexCandidates.insert(target);
+    mempool.AddTransactionsUpdated(1);
+    cvBlockChange.notify_all();
+
+    LogPrintf("%s: cut shadow fork active chain from height=%d hash=%s to requested height=%d hash=%s by disconnecting %d source blocks; coins best moved from %s; removed %u loaded above-cut block index entries\n",
+        __func__, loaded_height, loaded_hash.ToString(), target->nHeight,
+        target->GetBlockHash().ToString(), disconnected, old_coins_best.ToString(),
+        static_cast<unsigned int>(removed_above_cut));
+    return true;
+}
+
+bool BuildShadowForkBlockIndexSnapshot(const CChainParams& chainparams)
+{
+    LOCK(cs_main);
+
+    if (chainparams.GetConsensus(0).fShadowForkMode) {
+        return error("%s: shadowfork snapshots must be built from a source main/test datadir", __func__);
+    }
+    if (chainActive.Tip() == NULL) {
+        return error("%s: chainActive tip is null", __func__);
+    }
+
+    const std::string source_chain = GetShadowForkSnapshotSourceChain(chainparams);
+    if (source_chain != "main" && source_chain != "test") {
+        return error("%s: unsupported shadowfork snapshot source chain %s", __func__, source_chain);
+    }
+
+    ShadowForkSnapshotMetadata metadata;
+    metadata.source_chain = source_chain;
+    metadata.genesis_hash = chainparams.GetConsensus(0).hashGenesisBlock;
+    metadata.active_tip_hash = chainActive.Tip()->GetBlockHash();
+    metadata.active_tip_height = chainActive.Height();
+    metadata.tx_index = fTxIndex;
+    metadata.have_pruned = fHavePruned;
+    metadata.last_block_file = nLastBlockFile;
+    metadata.block_count = static_cast<uint64_t>(chainActive.Height()) + 1;
+    metadata.block_file_info = vinfoBlockFile;
+
+    const int64_t nSnapshotStart = GetTimeMillis();
+    ShadowForkSnapshotWriter writer;
+    std::string snapshot_error;
+    if (!writer.Open(source_chain, &snapshot_error)) {
+        return error("%s: %s", __func__, snapshot_error);
+    }
+    if (!writer.WriteMetadata(metadata, &snapshot_error)) {
+        return error("%s: %s", __func__, snapshot_error);
+    }
+
+    for (int height = 0; height <= chainActive.Height(); ++height) {
+        const CBlockIndex* pindex = chainActive[height];
+        if (pindex == NULL) {
+            return error("%s: active chain entry at height %d is null", __func__, height);
+        }
+
+        ShadowForkActiveChainRecord record;
+        record.block_hash = pindex->GetBlockHash();
+        record.chain_work = ArithToUint256(pindex->nChainWork);
+        record.chain_tx_count = pindex->nChainTx;
+        record.time_max = pindex->nTimeMax;
+
+        if (!writer.WriteActiveChainRecord(record, &snapshot_error)) {
+            return error("%s: %s", __func__, snapshot_error);
+        }
+    }
+
+    if (!writer.Commit(&snapshot_error)) {
+        return error("%s: %s", __func__, snapshot_error);
+    }
+
+    LogPrintf("%s: wrote shadowfork snapshot for %s with %u active-chain entries to %s in %dms\n",
+        __func__, source_chain, (unsigned int)metadata.block_count,
+        GetShadowForkSnapshotPath(source_chain).string(),
+        GetTimeMillis() - nSnapshotStart);
+
     return true;
 }
 
@@ -4137,7 +5022,8 @@ bool LoadExternalBlockFile(const CChainParams& chainparams, FILE* fileIn, CDiskB
                 if (mapBlockIndex.count(hash) == 0 || (mapBlockIndex[hash]->nStatus & BLOCK_HAVE_DATA) == 0) {
                     LOCK(cs_main);
                     CValidationState state;
-                    if (AcceptBlock(pblock, state, chainparams, NULL, true, dbp, NULL))
+                    const bool fCheckPOW = !IsShadowForkInstantMiningEnabled(chainparams.GetConsensus(0));
+                    if (AcceptBlock(pblock, state, chainparams, NULL, true, dbp, NULL, fCheckPOW))
                         nLoaded++;
                     if (state.IsError())
                         break;
@@ -4172,7 +5058,8 @@ bool LoadExternalBlockFile(const CChainParams& chainparams, FILE* fileIn, CDiskB
                                     head.ToString());
                             LOCK(cs_main);
                             CValidationState dummy;
-                            if (AcceptBlock(pblockrecursive, dummy, chainparams, NULL, true, &it->second, NULL))
+                            const bool fCheckPOW = !IsShadowForkInstantMiningEnabled(chainparams.GetConsensus(0));
+                            if (AcceptBlock(pblockrecursive, dummy, chainparams, NULL, true, &it->second, NULL, fCheckPOW))
                             {
                                 nLoaded++;
                                 queue.push_back(pblockrecursive->GetHash());
@@ -4270,7 +5157,8 @@ void static CheckBlockIndex(const Consensus::Params& consensusParams)
         assert((pindexFirstNotTransactionsValid != NULL) == (pindex->nChainTx == 0));
         assert(pindex->nHeight == nHeight); // nHeight must be consistent.
         assert(pindex->pprev == NULL || pindex->nChainWork >= pindex->pprev->nChainWork); // For every block except the genesis block, the chainwork must be larger than the parent's.
-        assert(nHeight < 2 || (pindex->pskip && (pindex->pskip->nHeight < nHeight))); // The pskip pointer must point back for all but the first 2 blocks.
+        assert(nHeight < 2 || (pindex->pskip && (pindex->pskip->nHeight < nHeight)) ||
+               (g_shadowfork_lazy_block_index.enabled && chainActive.Contains(pindex))); // Snapshot-loaded active-chain entries may omit pskip.
         assert(pindexFirstNotTreeValid == NULL); // All mapBlockIndex entries must at least be TREE valid
         if ((pindex->nStatus & BLOCK_VALID_MASK) >= BLOCK_VALID_TREE) assert(pindexFirstNotTreeValid == NULL); // TREE valid implies all parents are TREE valid
         if ((pindex->nStatus & BLOCK_VALID_MASK) >= BLOCK_VALID_CHAIN) assert(pindexFirstNotChainValid == NULL); // CHAIN valid implies all parents are CHAIN valid

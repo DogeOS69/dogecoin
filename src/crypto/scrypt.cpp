@@ -43,9 +43,7 @@
 #endif
 #endif
 
-#if defined(__APPLE__)
-/* macOS SDK 26+ provides be32dec/be32enc via sys/endian.h (already included from scrypt.h) */
-#elif !defined(__FreeBSD__)
+#if !defined(__FreeBSD__)
 static inline uint32_t be32dec(const void *pp)
 {
 	const uint8_t *p = (uint8_t const *)pp;

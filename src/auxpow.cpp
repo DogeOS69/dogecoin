@@ -49,11 +49,22 @@ int CMerkleTx::GetDepthInMainChain(const CBlockIndex* &pindexRet) const
 
     AssertLockHeld(cs_main);
 
-    // Find the block it claims to be in
-    BlockMap::iterator mi = mapBlockIndex.find(hashBlock);
-    if (mi == mapBlockIndex.end())
-        return 0;
-    CBlockIndex* pindex = (*mi).second;
+    const Consensus::Params& consensus = Params().GetConsensus(chainActive.Height());
+
+    // In shadowfork mode, inherited wallet records can point at source-chain
+    // history outside the current fork. Only report depth when active-chain
+    // membership can be proven.
+    if (consensus.fShadowForkMode) {
+        CBlockIndex* pindex = LookupBlockIndex(hashBlock);
+        if (!pindex || !chainActive.Contains(pindex))
+            return 0;
+
+        pindexRet = pindex;
+        return ((nIndex == -1) ? (-1) : 1) * (chainActive.Height() - pindex->nHeight + 1);
+    }
+
+    // Find the block it claims to be in.
+    CBlockIndex* pindex = LookupBlockIndex(hashBlock);
     if (!pindex || !chainActive.Contains(pindex))
         return 0;
 

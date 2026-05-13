@@ -18,8 +18,40 @@ const struct BIP9DeploymentInfo VersionBitsDeploymentInfo[Consensus::MAX_VERSION
     {
         /*.name =*/ "segwit",
         /*.gbt_force =*/ true,
-    }
+	}
 };
+
+namespace {
+
+bool GetShadowForkVersionBitsOverride(const Consensus::Params& params, Consensus::DeploymentPos pos, ThresholdState* state, int* since_height = nullptr)
+{
+    if (!params.fShadowForkMode) {
+        return false;
+    }
+
+    switch (pos) {
+    case Consensus::DEPLOYMENT_CSV:
+        *state = THRESHOLD_ACTIVE;
+        break;
+    case Consensus::DEPLOYMENT_SEGWIT:
+        *state = (params.vDeployments[pos].nTimeout == 0) ? THRESHOLD_FAILED : THRESHOLD_ACTIVE;
+        break;
+    default:
+        *state = THRESHOLD_DEFINED;
+        break;
+    }
+
+    if (since_height != nullptr) {
+        // Shadow forks flatten inherited consensus into a synthetic chain that is
+        // intended to behave like the already-activated source tip. Report the
+        // override as applying from the start of the forked chain.
+        *since_height = 0;
+    }
+
+    return true;
+}
+
+} // namespace
 
 ThresholdState AbstractThresholdConditionChecker::GetStateFor(const CBlockIndex* pindexPrev, const Consensus::Params& params, ThresholdConditionCache& cache) const
 {
@@ -164,11 +196,20 @@ public:
 
 ThresholdState VersionBitsState(const CBlockIndex* pindexPrev, const Consensus::Params& params, Consensus::DeploymentPos pos, VersionBitsCache& cache)
 {
+    ThresholdState override_state;
+    if (GetShadowForkVersionBitsOverride(params, pos, &override_state)) {
+        return override_state;
+    }
     return VersionBitsConditionChecker(pos).GetStateFor(pindexPrev, params, cache.caches[pos]);
 }
 
 int VersionBitsStateSinceHeight(const CBlockIndex* pindexPrev, const Consensus::Params& params, Consensus::DeploymentPos pos, VersionBitsCache& cache)
 {
+    ThresholdState override_state;
+    int override_since_height = 0;
+    if (GetShadowForkVersionBitsOverride(params, pos, &override_state, &override_since_height)) {
+        return override_since_height;
+    }
     return VersionBitsConditionChecker(pos).GetStateSinceHeightFor(pindexPrev, params, cache.caches[pos]);
 }
 

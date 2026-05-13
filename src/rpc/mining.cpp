@@ -56,12 +56,17 @@ UniValue GetNetworkHashPS(int lookup, int height) {
     if (lookup > pb->nHeight)
         lookup = pb->nHeight;
 
-    CBlockIndex *pb0 = pb;
+    CBlockIndex *pb0 = chainActive[pb->nHeight - lookup];
+    if (pb0 == NULL)
+        return 0;
+
     int64_t minTime = pb0->GetBlockTime();
     int64_t maxTime = minTime;
-    for (int i = 0; i < lookup; i++) {
-        pb0 = pb0->pprev;
-        int64_t time = pb0->GetBlockTime();
+    for (int cursor_height = pb0->nHeight + 1; cursor_height <= pb->nHeight; ++cursor_height) {
+        CBlockIndex* cursor = chainActive[cursor_height];
+        if (cursor == NULL)
+            return 0;
+        int64_t time = cursor->GetBlockTime();
         minTime = std::min(time, minTime);
         maxTime = std::max(time, maxTime);
     }
@@ -127,6 +132,9 @@ UniValue generateBlocks(std::shared_ptr<CReserveScript> coinbaseScript, int nGen
         }
         const Consensus::Params& consensus = Params().GetConsensus(nHeight);
         const bool fShadowForkInstantMining = consensus.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true);
+        if (nMineAuxPow) {
+            CAuxPow::initAuxPow(*pblock);
+        }
         if (fShadowForkInstantMining) {
             LogPrintf("generateBlocks: shadow fork instant mining enabled; skipping local proof-of-work search\n");
         } else if (!nMineAuxPow) {
@@ -135,7 +143,6 @@ UniValue generateBlocks(std::shared_ptr<CReserveScript> coinbaseScript, int nGen
                 --nMaxTries;
             }
         } else {
-            CAuxPow::initAuxPow(*pblock);
             CPureBlockHeader& miningHeader = pblock->auxpow->parentBlock;
             while (nMaxTries > 0 && miningHeader.nNonce < nInnerLoopCount && !CheckProofOfWork(miningHeader.GetPoWHash(), pblock->nBits, consensus)) {
                 ++miningHeader.nNonce;
@@ -158,7 +165,7 @@ UniValue generateBlocks(std::shared_ptr<CReserveScript> coinbaseScript, int nGen
             }
         }
         std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(*pblock);
-        if (!ProcessNewBlock(Params(), shared_pblock, true, NULL)) {
+        if (!ProcessNewBlock(Params(), shared_pblock, true, NULL, !fShadowForkInstantMining)) {
             if (nMineAuxPow) {
                 continue;
             }
@@ -470,9 +477,8 @@ UniValue getblocktemplate(const JSONRPCRequest& request)
                 throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "Block decode failed");
 
             uint256 hash = block.GetHash();
-            BlockMap::iterator mi = mapBlockIndex.find(hash);
-            if (mi != mapBlockIndex.end()) {
-                CBlockIndex *pindex = mi->second;
+            CBlockIndex *pindex = LookupBlockIndex(hash);
+            if (pindex != NULL) {
                 if (pindex->IsValid(BLOCK_VALID_SCRIPTS))
                     return "duplicate";
                 if (pindex->nStatus & BLOCK_FAILED_MASK)
@@ -798,9 +804,8 @@ UniValue submitblock(const JSONRPCRequest& request)
     bool fBlockPresent = false;
     {
         LOCK(cs_main);
-        BlockMap::iterator mi = mapBlockIndex.find(hash);
-        if (mi != mapBlockIndex.end()) {
-            CBlockIndex *pindex = mi->second;
+        CBlockIndex *pindex = LookupBlockIndex(hash);
+        if (pindex != NULL) {
             if (pindex->IsValid(BLOCK_VALID_SCRIPTS))
                 return "duplicate";
             if (pindex->nStatus & BLOCK_FAILED_MASK)
@@ -810,18 +815,21 @@ UniValue submitblock(const JSONRPCRequest& request)
         }
     }
 
+    bool fCheckPOW = true;
     {
         LOCK(cs_main);
-        BlockMap::iterator mi = mapBlockIndex.find(block.hashPrevBlock);
-        if (mi != mapBlockIndex.end()) {
-            int nHeight = chainActive.Height() + 1;
-            UpdateUncommittedBlockStructures(block, mi->second, Params().GetConsensus(nHeight));
+        CBlockIndex* pprev = LookupBlockIndex(block.hashPrevBlock);
+        if (pprev != NULL) {
+            int nHeight = pprev->nHeight + 1;
+            const Consensus::Params& consensus = Params().GetConsensus(nHeight);
+            fCheckPOW = !(consensus.fShadowForkMode && GetBoolArg("-shadowforkinstantmining", true));
+            UpdateUncommittedBlockStructures(block, pprev, consensus);
         }
     }
 
     submitblock_StateCatcher sc(block.GetHash());
     RegisterValidationInterface(&sc);
-    bool fAccepted = ProcessNewBlock(Params(), blockptr, true, NULL);
+    bool fAccepted = ProcessNewBlock(Params(), blockptr, true, NULL, fCheckPOW);
     UnregisterValidationInterface(&sc);
     if (fBlockPresent)
     {

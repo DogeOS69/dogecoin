@@ -148,22 +148,24 @@ static bool rest_headers(HTTPRequest* req,
 
     std::vector<const CBlockIndex *> headers;
     headers.reserve(count);
+    CDataStream ssHeader(SER_NETWORK, PROTOCOL_VERSION);
+    const CChainParams& chainparams = Params();
+    UniValue jsonHeaders(UniValue::VARR);
     {
         LOCK(cs_main);
-        BlockMap::const_iterator it = mapBlockIndex.find(hash);
-        const CBlockIndex *pindex = (it != mapBlockIndex.end()) ? it->second : NULL;
+        const CBlockIndex *pindex = LookupBlockIndex(hash);
         while (pindex != NULL && chainActive.Contains(pindex)) {
             headers.push_back(pindex);
             if (headers.size() == (unsigned long)count)
                 break;
             pindex = chainActive.Next(pindex);
         }
-    }
 
-    CDataStream ssHeader(SER_NETWORK, PROTOCOL_VERSION);
-    const CChainParams& chainparams = Params();
-    BOOST_FOREACH(const CBlockIndex *pindex, headers) {
-        ssHeader << pindex->GetBlockHeader(chainparams.GetConsensus(pindex->nHeight));
+        BOOST_FOREACH(const CBlockIndex *pindex, headers) {
+            ssHeader << pindex->GetBlockHeader(chainparams.GetConsensus(pindex->nHeight));
+            if (rf == RF_JSON)
+                jsonHeaders.push_back(blockheaderToJSON(pindex));
+        }
     }
 
     switch (rf) {
@@ -181,10 +183,6 @@ static bool rest_headers(HTTPRequest* req,
         return true;
     }
     case RF_JSON: {
-        UniValue jsonHeaders(UniValue::VARR);
-        BOOST_FOREACH(const CBlockIndex *pindex, headers) {
-            jsonHeaders.push_back(blockheaderToJSON(pindex));
-        }
         std::string strJSON = jsonHeaders.write() + "\n";
         req->WriteHeader("Content-Type", "application/json");
         req->WriteReply(HTTP_OK, strJSON);
@@ -216,10 +214,9 @@ static bool rest_block(HTTPRequest* req,
     CBlockIndex* pblockindex = NULL;
     {
         LOCK(cs_main);
-        if (mapBlockIndex.count(hash) == 0)
+        pblockindex = LookupBlockIndex(hash);
+        if (pblockindex == NULL)
             return RESTERR(req, HTTP_NOT_FOUND, hashStr + " not found");
-
-        pblockindex = mapBlockIndex[hash];
         if (fHavePruned && !(pblockindex->nStatus & BLOCK_HAVE_DATA) && pblockindex->nTx > 0)
             return RESTERR(req, HTTP_NOT_FOUND, hashStr + " not available (pruned data)");
 
@@ -246,7 +243,11 @@ static bool rest_block(HTTPRequest* req,
     }
 
     case RF_JSON: {
-        UniValue objBlock = blockToJSON(block, pblockindex, showTxDetails);
+        UniValue objBlock(UniValue::VOBJ);
+        {
+            LOCK(cs_main);
+            objBlock = blockToJSON(block, pblockindex, showTxDetails);
+        }
         std::string strJSON = objBlock.write() + "\n";
         req->WriteHeader("Content-Type", "application/json");
         req->WriteReply(HTTP_OK, strJSON);
@@ -387,7 +388,10 @@ static bool rest_tx(HTTPRequest* req, const std::string& strURIPart)
 
     case RF_JSON: {
         UniValue objTx(UniValue::VOBJ);
-        TxToJSON(*tx, hashBlock, objTx);
+        {
+            LOCK(cs_main);
+            TxToJSON(*tx, hashBlock, objTx);
+        }
         std::string strJSON = objTx.write() + "\n";
         req->WriteHeader("Content-Type", "application/json");
         req->WriteReply(HTTP_OK, strJSON);

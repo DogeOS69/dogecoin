@@ -184,8 +184,16 @@ void attemptRescanFromHeight(const uint32_t nHeight)
     else
         pblockindex = chainActive[nHeight];
 
+    if (Params().GetConsensus(chainActive.Height()).fShadowForkMode && chainActive.WindowStartHeight() > 0) {
+        if (pblockindex == NULL || pblockindex->nHeight < chainActive.WindowStartHeight())
+            pblockindex = chainActive[chainActive.WindowStartHeight()];
+    }
+    if (pblockindex == NULL)
+        throw JSONRPCError(RPC_MISC_ERROR, "Rescan start block is not available");
+
     pwalletMain->ScanForWalletTransactions(pblockindex, true);
-    pwalletMain->ReacceptWalletTransactions();
+    if (!Params().GetConsensus(chainActive.Height()).fShadowForkMode)
+        pwalletMain->ReacceptWalletTransactions();
 }
 
 void ImportAddress(const CBitcoinAddress& address, const string& strLabel);
@@ -322,7 +330,8 @@ UniValue importprunedfunds(const JSONRPCRequest& request)
 
         LOCK(cs_main);
 
-        if (!mapBlockIndex.count(merkleBlock.header.GetHash()) || !chainActive.Contains(mapBlockIndex[merkleBlock.header.GetHash()]))
+        CBlockIndex* pindex = LookupBlockIndex(merkleBlock.header.GetHash());
+        if (pindex == NULL || !chainActive.Contains(pindex))
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found in chain");
 
         vector<uint256>::const_iterator it;
@@ -537,6 +546,12 @@ UniValue importwallet(const JSONRPCRequest& request)
     pwalletMain->UpdateTimeFirstKey(nTimeBegin);
 
     CBlockIndex *pindex = chainActive.FindEarliestAtLeast(nTimeBegin - 7200);
+    if (Params().GetConsensus(chainActive.Height()).fShadowForkMode && chainActive.WindowStartHeight() > 0) {
+        if (pindex == NULL || pindex->nHeight < chainActive.WindowStartHeight())
+            pindex = chainActive[chainActive.WindowStartHeight()];
+    }
+    if (pindex == NULL)
+        throw JSONRPCError(RPC_MISC_ERROR, "Rescan start block is not available");
 
     LogPrintf("Rescanning last %i blocks\n", pindex ? chainActive.Height() - pindex->nHeight + 1 : 0);
     pwalletMain->ScanForWalletTransactions(pindex);
