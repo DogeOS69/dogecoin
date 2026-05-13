@@ -59,6 +59,19 @@ void EnsureWalletIsUnlocked()
         throw JSONRPCError(RPC_WALLET_UNLOCK_NEEDED, "Error: Please enter the wallet passphrase with walletpassphrase first.");
 }
 
+static void ThrowKeyGenerationError()
+{
+    if (pwalletMain->IsShadowForkMemoryOnly()) {
+        if (pwalletMain->IsLocked()) {
+            throw JSONRPCError(RPC_WALLET_UNLOCK_NEEDED,
+                "Error: Shadow fork memory-only wallet is locked; enter the wallet passphrase before generating an in-memory key.");
+        }
+        throw JSONRPCError(RPC_WALLET_ERROR,
+            "Error: Shadow fork memory-only wallet could not generate an in-memory key; see debug.log.");
+    }
+    throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "Error: Keypool ran out, please call keypoolrefill first");
+}
+
 void WalletTxToJSON(const CWalletTx& wtx, UniValue& entry)
 {
     int confirms = wtx.GetDepthInMainChain();
@@ -142,7 +155,7 @@ UniValue getnewaddress(const JSONRPCRequest& request)
     // Generate a new key that is added to wallet
     CPubKey newKey;
     if (!pwalletMain->GetKeyFromPool(newKey))
-        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "Error: Keypool ran out, please call keypoolrefill first");
+        ThrowKeyGenerationError();
     CKeyID keyID = newKey.GetID();
 
     pwalletMain->SetAddressBook(keyID, strAccount, "receive");
@@ -155,7 +168,7 @@ CBitcoinAddress GetAccountAddress(string strAccount, bool bForceNew=false)
 {
     CPubKey pubKey;
     if (!pwalletMain->GetAccountPubkey(pubKey, strAccount, bForceNew)) {
-        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "Error: Keypool ran out, please call keypoolrefill first");
+        ThrowKeyGenerationError();
     }
 
     return CBitcoinAddress(pubKey.GetID());
@@ -218,7 +231,7 @@ UniValue getrawchangeaddress(const JSONRPCRequest& request)
     CReserveKey reservekey(pwalletMain);
     CPubKey vchPubKey;
     if (!reservekey.GetReservedKey(vchPubKey))
-        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "Error: Keypool ran out, please call keypoolrefill first");
+        ThrowKeyGenerationError();
 
     reservekey.KeepKey();
 
@@ -2126,6 +2139,11 @@ UniValue keypoolrefill(const JSONRPCRequest& request)
     }
 
     EnsureWalletIsUnlocked();
+    if (pwalletMain->IsShadowForkMemoryOnly()) {
+        LogPrintf("%s: shadow fork memory-only wallet uses on-demand keys; keypoolrefill is a no-op\n",
+            __func__);
+        return NullUniValue;
+    }
     pwalletMain->TopUpKeyPool(kpSize);
 
     if (pwalletMain->GetKeyPoolSize() < kpSize)
@@ -2241,8 +2259,13 @@ UniValue walletpassphrasechange(const JSONRPCRequest& request)
             "walletpassphrasechange <oldpassphrase> <newpassphrase>\n"
             "Changes the wallet passphrase from <oldpassphrase> to <newpassphrase>.");
 
-    if (!pwalletMain->ChangeWalletPassphrase(strOldWalletPass, strNewWalletPass))
+    if (!pwalletMain->ChangeWalletPassphrase(strOldWalletPass, strNewWalletPass)) {
+        if (pwalletMain->IsShadowForkMemoryOnly()) {
+            throw JSONRPCError(RPC_WALLET_ERROR,
+                "Error: walletpassphrasechange is disabled for shadow fork memory-only wallets because it would persist updated master keys.");
+        }
         throw JSONRPCError(RPC_WALLET_PASSPHRASE_INCORRECT, "Error: The wallet passphrase entered was incorrect.");
+    }
 
     return NullUniValue;
 }
@@ -2334,8 +2357,13 @@ UniValue encryptwallet(const JSONRPCRequest& request)
             "encryptwallet <passphrase>\n"
             "Encrypts the wallet with <passphrase>.");
 
-    if (!pwalletMain->EncryptWallet(strWalletPass))
+    if (!pwalletMain->EncryptWallet(strWalletPass)) {
+        if (pwalletMain->IsShadowForkMemoryOnly()) {
+            throw JSONRPCError(RPC_WALLET_ENCRYPTION_FAILED,
+                "Error: encryptwallet is disabled for shadow fork memory-only wallets because it would persist encrypted keys and master keys.");
+        }
         throw JSONRPCError(RPC_WALLET_ENCRYPTION_FAILED, "Error: Failed to encrypt the wallet.");
+    }
 
     // BDB seems to have a bad habit of writing old data into
     // slack space in .dat files; that is bad if the old data is

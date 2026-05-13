@@ -385,6 +385,11 @@ bool WalletModel::setWalletEncrypted(bool encrypted, const SecureString &passphr
     }
 }
 
+bool WalletModel::isShadowForkMemoryOnly() const
+{
+    return wallet->IsShadowForkMemoryOnly();
+}
+
 bool WalletModel::setWalletLocked(bool locked, const SecureString &passPhrase)
 {
     if(locked)

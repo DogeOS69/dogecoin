@@ -111,6 +111,13 @@ void AskPassphraseDialog::accept()
             // Cannot encrypt with empty passphrase
             break;
         }
+        if(model->isShadowForkMemoryOnly())
+        {
+            QMessageBox::critical(this, tr("Wallet encryption disabled"),
+                                  tr("Wallet encryption is disabled for shadow fork memory-only wallets because encrypted keys and master keys would require wallet database writes."));
+            QDialog::reject();
+            break;
+        }
         QMessageBox::StandardButton retval = QMessageBox::question(this, tr("Confirm wallet encryption"),
                  tr("Warning: If you encrypt your wallet and lose your passphrase, you will <b>LOSE ALL OF YOUR DOGECOINS</b>!") + "<br><br>" + tr("Are you sure you wish to encrypt your wallet?"),
                  QMessageBox::Yes|QMessageBox::Cancel,
@@ -175,6 +182,13 @@ void AskPassphraseDialog::accept()
         }
         break;
     case ChangePass:
+        if(model->isShadowForkMemoryOnly())
+        {
+            QMessageBox::critical(this, tr("Wallet passphrase change disabled"),
+                                  tr("Wallet passphrase changes are disabled for shadow fork memory-only wallets because updated master keys would require wallet database writes."));
+            QDialog::reject();
+            break;
+        }
         if(newpass1 == newpass2)
         {
             if(model->changePassphrase(oldpass, newpass1))

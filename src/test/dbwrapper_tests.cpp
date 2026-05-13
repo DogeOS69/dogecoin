@@ -8,6 +8,7 @@
 #include "uint256.h"
 #include "random.h"
 #include "test/test_bitcoin.h"
+#include "txdb.h"
 
 #include <boost/assign/std/vector.hpp> // for 'operator+=()'
 #include <boost/assert.hpp>
@@ -81,6 +82,42 @@ BOOST_AUTO_TEST_CASE(dbwrapper_batch)
         // key3 should've never been written
         BOOST_CHECK(dbw.Read(key3, res) == false);
     }
+}
+
+BOOST_AUTO_TEST_CASE(blocktree_flag_helpers)
+{
+    CBlockTreeDB dbw(1 << 20, true);
+
+    bool flag = true;
+    BOOST_CHECK(!dbw.ReadFlag("missing", flag));
+    BOOST_CHECK_EQUAL(flag, true);
+    BOOST_CHECK(!dbw.ExistsFlag("missing"));
+
+    BOOST_CHECK(dbw.WriteFlag("trusted-cut", true, true));
+    flag = false;
+    BOOST_CHECK(dbw.ExistsFlag("trusted-cut"));
+    BOOST_CHECK(dbw.ReadFlag("trusted-cut", flag));
+    BOOST_CHECK_EQUAL(flag, true);
+
+    BOOST_CHECK(dbw.WriteFlag("trusted-cut", false, true));
+    flag = true;
+    BOOST_CHECK(dbw.ReadFlag("trusted-cut", flag));
+    BOOST_CHECK_EQUAL(flag, false);
+
+    int height = -1;
+    BOOST_CHECK(dbw.WriteFlagInt("trusted-cut-height", 42, true));
+    BOOST_CHECK(dbw.ReadFlagInt("trusted-cut-height", height));
+    BOOST_CHECK_EQUAL(height, 42);
+    BOOST_CHECK(dbw.EraseFlag("trusted-cut-height", true));
+    BOOST_CHECK(!dbw.ExistsFlag("trusted-cut-height"));
+
+    BOOST_CHECK(dbw.Write(std::make_pair(static_cast<char>('F'), std::string("bad-flag")), static_cast<char>('x'), true));
+    flag = true;
+    BOOST_CHECK(!dbw.ReadFlag("bad-flag", flag));
+    BOOST_CHECK_EQUAL(flag, true);
+    height = -1;
+    BOOST_CHECK(!dbw.ReadFlagInt("bad-flag", height));
+    BOOST_CHECK_EQUAL(height, -1);
 }
 
 BOOST_AUTO_TEST_CASE(dbwrapper_iterator)
