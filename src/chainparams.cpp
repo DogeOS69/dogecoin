@@ -511,9 +511,12 @@ public:
         vSeeds.clear();
         vFixedSeeds.clear();
 
-        // Dev-friendly flags (like regtest)
+        // Dev-friendly flags. Keep expensive consistency checks disabled by
+        // default: shadowforks can inherit tens of millions of source-chain
+        // blocks through the lazy snapshot index, and regtest-style
+        // CheckBlockIndex passes can stall every mined block for minutes.
         fMiningRequiresPeers = false;
-        fDefaultConsistencyChecks = true;
+        fDefaultConsistencyChecks = false;
         fRequireStandard = false;
         fMineBlocksOnDemand = true;
 

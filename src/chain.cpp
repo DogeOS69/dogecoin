@@ -197,8 +197,17 @@ const CBlockIndex* CBlockIndex::GetAncestor(int height) const
 
 void CBlockIndex::BuildSkip()
 {
-    if (pprev)
-        pskip = pprev->GetAncestor(GetSkipHeight(nHeight));
+    if (!pprev) {
+        return;
+    }
+
+    const int skip_height = GetSkipHeight(nHeight);
+    if (IsBelowShadowForkStartupCutWindow(skip_height)) {
+        pskip = NULL;
+        return;
+    }
+
+    pskip = pprev->GetAncestor(skip_height);
 }
 
 arith_uint256 GetBlockProof(const CBlockIndex& block)
