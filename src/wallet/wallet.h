@@ -623,6 +623,10 @@ public:
             mapKeyMetadata[keyid] = CKeyMetadata(keypool.nTime);
     }
 
+    /** Special keypool indexes returned through ReserveKeyFromKeyPool. */
+    static const int64_t KEYPOOL_INVALID_INDEX = -1;
+    static const int64_t KEYPOOL_MEMORY_ONLY_INDEX = -2;
+
     // Map from Key ID (for regular keys) or Script ID (for watch-only keys) to
     // key metadata.
     std::map<CTxDestination, CKeyMetadata> mapKeyMetadata;
@@ -741,6 +745,7 @@ public:
     //! Adds a watch-only address to the store, without saving it to disk (used by LoadWallet)
     bool LoadWatchOnly(const CScript &dest);
 
+    bool IsShadowForkMemoryOnly() const;
     bool Unlock(const SecureString& strWalletPassphrase);
     bool ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase);
     bool EncryptWallet(const SecureString& strWalletPassphrase);
@@ -983,7 +988,7 @@ protected:
 public:
     CReserveKey(CWallet* pwalletIn)
     {
-        nIndex = -1;
+        nIndex = CWallet::KEYPOOL_INVALID_INDEX;
         pwallet = pwalletIn;
     }
 

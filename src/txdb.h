@@ -120,8 +120,12 @@ public:
     bool ReadTxIndex(const uint256 &txid, CDiskTxPos &pos);
     bool ReadBlockIndex(const uint256 &hash, CDiskBlockIndex &diskindex);
     bool WriteTxIndex(const std::vector<std::pair<uint256, CDiskTxPos> > &list);
-    bool WriteFlag(const std::string &name, bool fValue);
+    bool WriteFlag(const std::string &name, bool fValue, bool fSync = false);
     bool ReadFlag(const std::string &name, bool &fValue);
+    bool ExistsFlag(const std::string &name);
+    bool EraseFlag(const std::string &name, bool fSync = false);
+    bool WriteFlagInt(const std::string &name, int nValue, bool fSync = false);
+    bool ReadFlagInt(const std::string &name, int &nValue);
     bool LoadBlockIndexGuts(std::function<CBlockIndex*(const uint256&)> insertBlockIndex);
 };
 

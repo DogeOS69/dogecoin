@@ -150,6 +150,7 @@ public:
     SendCoinsReturn sendCoins(WalletModelTransaction &transaction);
 
     // Wallet encryption
+    bool isShadowForkMemoryOnly() const;
     bool setWalletEncrypted(bool encrypted, const SecureString &passphrase);
     // Passphrase only needed when unlocking
     bool setWalletLocked(bool locked, const SecureString &passPhrase=SecureString());

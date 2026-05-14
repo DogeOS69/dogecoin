@@ -17,7 +17,10 @@ from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
     assert_greater_than,
+    assert_raises_message,
+    JSONRPCException,
     start_node,
+    stop_node,
     connect_nodes_bi,
     hex_str_to_bytes,
     bytes_to_hex_str,
@@ -27,6 +30,7 @@ from test_framework.util import (
 )
 import os
 import logging
+import subprocess
 from test_framework.mininode import CTransaction, CTxIn, CTxOut, COutPoint, sha256
 from test_framework.script import CScript, OP_CHECKSIG, OP_DUP, OP_HASH160, OP_EQUALVERIFY
 
@@ -74,6 +78,12 @@ class ShadowForkTest(BitcoinTestFramework):
 
     def run_test(self):
         """Run all shadow fork tests."""
+        self.log.info("Testing memory-only wallet mode...")
+        self.test_memory_only_wallet()
+
+        self.log.info("Testing trusted startup cut fail-closed markers...")
+        self.test_trusted_startup_cut_fail_closed()
+
         self.log.info("Testing shadow fork initialization...")
         self.test_shadowfork_init()
 
@@ -95,6 +105,88 @@ class ShadowForkTest(BitcoinTestFramework):
 
         # Should start with genesis block
         assert_greater_than(info['blocks'], -1)
+
+    def test_memory_only_wallet(self):
+        """Test that generated keys are retained only in memory."""
+        stop_node(self.nodes[0], 0)
+        self.nodes[0] = start_node(0, self.options.tmpdir, ["-shadowforkmemoryonlywallet=1"])
+
+        node = self.nodes[0]
+        addr = node.getnewaddress()
+        assert_equal(node.validateaddress(addr)['ismine'], True)
+        node.setaccount(addr, "memory-only")
+        assert_equal(node.getaccount(addr), "memory-only")
+        assert_raises_message(
+            JSONRPCException,
+            "encryptwallet is disabled for shadow fork memory-only wallets",
+            node.encryptwallet,
+            "temporary-passphrase",
+        )
+        node.keypoolrefill(1)
+
+        stop_node(node, 0)
+        self.nodes[0] = start_node(0, self.options.tmpdir, [])
+        assert_equal(self.nodes[0].validateaddress(addr)['ismine'], False)
+        assert_equal(self.nodes[0].getaccount(addr), "")
+
+    def assert_node_start_fails(self, extra_args, expected_text):
+        """Start dogecoind directly and assert initialization exits with an expected message."""
+        datadir = os.path.join(self.options.tmpdir, "node0")
+        binary = os.getenv("DOGECOIND", os.path.join(self.options.srcdir, "dogecoind"))
+        args = [
+            binary,
+            "-datadir=" + datadir,
+            "-server",
+            "-keypool=1",
+            "-discover=0",
+            "-rest",
+        ] + extra_args
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            stdout, stderr = proc.communicate(timeout=5)
+            raise AssertionError("dogecoind unexpectedly stayed running: %s\n%s%s" % (args, stdout, stderr))
+
+        if proc.returncode == 0:
+            raise AssertionError("dogecoind unexpectedly started successfully: %s" % (args,))
+
+        logs = stdout + stderr
+        for relpath in ("shadowfork/debug.log", "debug.log"):
+            path = os.path.join(datadir, relpath)
+            if os.path.exists(path):
+                with open(path, encoding="utf8", errors="replace") as f:
+                    logs += f.read()
+        if expected_text not in logs:
+            raise AssertionError("missing expected startup failure %r in:\n%s" % (expected_text, logs[-4000:]))
+
+    def test_trusted_startup_cut_fail_closed(self):
+        """Test trusted startup-cut datadir markers must be reused with matching flags."""
+        node = self.nodes[0]
+        addr = node.getnewaddress()
+        node.generatetoaddress(3, addr)
+
+        stop_node(node, 0)
+        self.nodes[0] = start_node(0, self.options.tmpdir, ["-shadowfork=1"])
+        stop_node(self.nodes[0], 0)
+
+        self.nodes[0] = start_node(0, self.options.tmpdir, ["-shadowfork=1", "-shadowforktruststartupcut=1"])
+        stop_node(self.nodes[0], 0)
+
+        expected = "datadir contains a chainstate marker written by -shadowforktruststartupcut"
+        self.assert_node_start_fails(["-shadowfork=1"], expected)
+        self.assert_node_start_fails(["-shadowfork=2", "-shadowforktruststartupcut=1"], expected)
+
+        self.nodes[0] = start_node(0, self.options.tmpdir, ["-shadowfork=1", "-shadowforktruststartupcut=1"])
+        node = self.nodes[0]
+        post_cut_addr = node.getnewaddress()
+        post_cut_block = node.generatetoaddress(1, post_cut_addr)[0]
+        assert_equal(node.getbestblockhash(), post_cut_block)
+
+        stop_node(node, 0)
+        self.nodes[0] = start_node(0, self.options.tmpdir, ["-shadowfork=1", "-shadowforktruststartupcut=1"])
+        assert_equal(self.nodes[0].getbestblockhash(), post_cut_block)
 
     def test_trivial_mining(self):
         """Test that mining works with trivial PoW."""

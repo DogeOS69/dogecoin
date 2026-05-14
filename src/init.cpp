@@ -488,8 +488,9 @@ std::string HelpMessage(HelpMessageMode mode)
         strUsage += HelpMessageOpt("-shadowforksnapshotroot=<dir>", _("Root directory for shared shadow fork snapshots; defaults to the nearest ancestor shadow-snapshots directory or <datadir>/shadow-snapshots"));
         strUsage += HelpMessageOpt("-shadowforksnapshotwindow=<n>", _("Eagerly load the newest <n> active-chain block-index entries from the snapshot at startup, lazily loading older active-chain entries on demand (default: 8192)"));
         strUsage += HelpMessageOpt("-shadowforkstartupcut", _("In shadow fork mode, cut the active chain to -shadowfork=<height> during startup instead of requiring external invalidateblock rollback (default: 1)"));
+        strUsage += HelpMessageOpt("-shadowforktruststartupcut", _("In shadow fork mode, trust the prepared-volume UTXO snapshot when cutting to -shadowfork=<height>, without undo-replaying inherited source blocks. Intended only for isolated test runtimes that spend post-fork outputs; do not enable on nodes connected to real networks because chainstate will not match consensus history (default: 0)"));
         strUsage += HelpMessageOpt("-shadowforkskipwalletrescan", _("In shadow fork mode, trust the startup-cut tip and skip stale inherited wallet rescans (default: 1)"));
-        strUsage += HelpMessageOpt("-shadowforkmemoryonlywallet", _("In shadow fork mode, skip wallet transaction DB loads and keep wallet changes in memory only (default: 0)"));
+        strUsage += HelpMessageOpt("-shadowforkmemoryonlywallet", _("In shadow fork mode, skip wallet transaction DB loads and keep wallet-generated state in memory only, including transactions, address/account metadata, keys, keypool, and HD counters. Intended only for isolated test runtimes; do not later reuse generated addresses with this flag disabled (default: 0)"));
     }
 
     strUsage += HelpMessageGroup(_("Node relay options:"));
@@ -951,6 +952,29 @@ bool AppInitParameterInteraction()
 
         LogPrintf("Shadow fork mode enabled: forking from %s at height %d, maturity=%d\n",
                   sourceChain, nForkHeight, nMaturity);
+    }
+
+    if (GetBoolArg("-shadowforktruststartupcut", false)) {
+        if (!chainparams.GetConsensus(0).fShadowForkMode) {
+            return InitError(_("-shadowforktruststartupcut requires shadow fork mode."));
+        }
+        if (GetArg("-shadowfork", -1) <= 0) {
+            return InitError(_("-shadowforktruststartupcut requires a positive -shadowfork height."));
+        }
+        if (!GetBoolArg("-shadowforkstartupcut", true)) {
+            return InitError(_("-shadowforktruststartupcut requires -shadowforkstartupcut."));
+        }
+        const std::string warning = _("Trusted shadow fork startup cut enabled; inherited chainstate will not be undo-replayed to the requested fork height. The persisted chainstate best-block marker will point at the fork height while UTXO contents remain prepared-volume test state with post-fork source-chain creates/spends. This is only for isolated test runtimes and must not be used on nodes connected to real networks.");
+        InitWarning(warning);
+        LogPrintf("WARNING: %s\n", warning);
+    }
+    if (GetBoolArg("-shadowforkmemoryonlywallet", false)) {
+        if (!chainparams.GetConsensus(0).fShadowForkMode) {
+            return InitError(_("-shadowforkmemoryonlywallet requires shadow fork mode."));
+        }
+        const std::string warning = _("Shadow fork memory-only wallet enabled; wallet-generated state including transactions, address/account metadata, keys, keypool, and HD counters will not be persisted. Do not reuse addresses generated in this mode after restarting without -shadowforkmemoryonlywallet.");
+        InitWarning(warning);
+        LogPrintf("WARNING: %s\n", warning);
     }
 
     // if using block pruning, then disallow txindex

@@ -101,10 +101,20 @@ namespace {
 
     static const int DEFAULT_SHADOWFORK_SNAPSHOT_WINDOW = 8192;
     static const int SHADOWFORK_LAZY_ACTIVE_CHAIN_CHUNK = 256;
+    static const char* SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG = "shadowforktruststartupcut";
+    static const char* SHADOWFORK_TRUSTED_STARTUP_CUT_HEIGHT_FLAG = "shadowforktruststartupcutheight";
 
     bool IsShadowForkOptimizationEnabled(const CChainParams& params, const char* arg)
     {
         return params.GetConsensus(0).fShadowForkMode && GetBoolArg(arg, true);
+    }
+
+    bool IsTrustedShadowForkStartupCutRequested(const CChainParams& params)
+    {
+        return params.GetConsensus(0).fShadowForkMode &&
+            GetBoolArg("-shadowforktruststartupcut", false) &&
+            GetBoolArg("-shadowforkstartupcut", true) &&
+            GetArg("-shadowfork", -1) > 0;
     }
 
     bool IsShadowForkInstantMiningEnabled(const Consensus::Params& consensusParams)
@@ -3811,11 +3821,13 @@ static void TrackLoadedBlockIndexEntry(CBlockIndex* pindex, bool fShadowForkFast
     }
 }
 
-static size_t RemoveLoadedBlockIndexEntriesAboveHeight(int height)
+static size_t RemoveLoadedBlockIndexEntriesAboveHeight(int height, bool fKeepActiveChain = false)
 {
     std::vector<BlockMap::iterator> entries_to_remove;
     for (BlockMap::iterator it = mapBlockIndex.begin(); it != mapBlockIndex.end(); ++it) {
-        if (it->second != NULL && it->second->nHeight > height) {
+        if (it->second != NULL &&
+            it->second->nHeight > height &&
+            (!fKeepActiveChain || !chainActive.Contains(it->second))) {
             entries_to_remove.push_back(it);
         }
     }
@@ -4524,6 +4536,33 @@ bool static LoadBlockIndexDBFromLevelDB(const CChainParams& chainparams)
 
 bool static LoadBlockIndexDB(const CChainParams& chainparams)
 {
+    bool fTrustedStartupCutDatadir = false;
+    const bool fTrustedStartupCutFlagExists = pblocktree->ExistsFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG);
+    const bool fTrustedStartupCutHeightExists = pblocktree->ExistsFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_HEIGHT_FLAG);
+    if (fTrustedStartupCutFlagExists) {
+        if (!pblocktree->ReadFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG, fTrustedStartupCutDatadir)) {
+            return error("%s: trusted shadow fork startup-cut marker is corrupted; rebuild the datadir", __func__);
+        }
+    }
+    if (!fTrustedStartupCutDatadir && fTrustedStartupCutHeightExists) {
+        return error("%s: trusted shadow fork startup-cut height marker exists without an active marker; rebuild the datadir",
+            __func__);
+    }
+    if (fTrustedStartupCutDatadir) {
+        int trusted_cut_height = -1;
+        if (!fTrustedStartupCutHeightExists ||
+            !pblocktree->ReadFlagInt(SHADOWFORK_TRUSTED_STARTUP_CUT_HEIGHT_FLAG, trusted_cut_height) ||
+            trusted_cut_height <= 0) {
+            return error("%s: trusted shadow fork startup-cut height marker is missing, corrupted, or non-positive; rebuild the datadir",
+                __func__);
+        }
+        if (!IsTrustedShadowForkStartupCutRequested(chainparams) ||
+            GetArg("-shadowfork", -1) != trusted_cut_height) {
+            return error("%s: datadir contains a chainstate marker written by -shadowforktruststartupcut at height %d; restart with shadow fork mode, -shadowforkstartupcut, -shadowforktruststartupcut, and -shadowfork=%d, or rebuild the datadir",
+                __func__, trusted_cut_height, trusted_cut_height);
+        }
+    }
+
     if (TryLoadShadowForkSnapshot(chainparams)) {
         return true;
     }
@@ -4797,20 +4836,164 @@ bool ApplyShadowForkStartupCut(const CChainParams& chainparams)
             __func__, requested_height);
     }
 
-    const int loaded_height = chainActive.Height();
-    const uint256 loaded_hash = chainActive.Tip()->GetBlockHash();
+    CBlockIndex* loaded_tip = chainActive.Tip();
+    const int old_window_start_height = chainActive.WindowStartHeight();
+    const int loaded_height = loaded_tip->nHeight;
+    const uint256 loaded_hash = loaded_tip->GetBlockHash();
     const uint256 old_coins_best = pcoinsTip->GetBestBlock();
+    const bool fTrustedStartupCut = GetBoolArg("-shadowforktruststartupcut", false);
+    bool fTrustedStartupCutDatadir = false;
+    if (fTrustedStartupCut && pblocktree->ExistsFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG)) {
+        if (!pblocktree->ReadFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG, fTrustedStartupCutDatadir)) {
+            return error("%s: trusted shadow fork startup-cut marker is corrupted; rebuild the datadir", __func__);
+        }
+        if (fTrustedStartupCutDatadir) {
+            int trusted_cut_height = -1;
+            if (!pblocktree->ReadFlagInt(SHADOWFORK_TRUSTED_STARTUP_CUT_HEIGHT_FLAG, trusted_cut_height) ||
+                trusted_cut_height != requested_height) {
+                return error("%s: trusted shadow fork startup-cut marker height does not match requested height %d; rebuild the datadir",
+                    __func__, requested_height);
+            }
+        }
+    }
     if (requested_height == loaded_height) {
         if (old_coins_best != target->GetBlockHash()) {
             return error("%s: active tip already at requested height %d but coins best is %s, expected %s; refusing unsafe shadow fork cut",
                 __func__, requested_height, old_coins_best.ToString(), target->GetBlockHash().ToString());
         }
-        LogPrintf("%s: loaded source tip already matches requested shadow fork height %d (%s)\n",
+        if (fTrustedStartupCut && !fTrustedStartupCutDatadir) {
+            const bool fWroteHeight = pblocktree->WriteFlagInt(SHADOWFORK_TRUSTED_STARTUP_CUT_HEIGHT_FLAG, target->nHeight, true);
+            const bool fWroteMarker = fWroteHeight && pblocktree->WriteFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG, true, true);
+            if (!fWroteHeight || !fWroteMarker) {
+                const bool fErasedHeight = pblocktree->EraseFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_HEIGHT_FLAG, true);
+                const bool fErasedMarker = pblocktree->EraseFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG, true);
+                return error("%s: failed to mark datadir as using trusted shadow fork startup cut%s%s",
+                    __func__,
+                    fErasedHeight ? "" : "; also failed to erase partial trusted-cut height marker",
+                    fErasedMarker ? "" : "; also failed to erase partial trusted-cut active marker");
+            }
+        }
+        LogPrintf("%s: loaded source tip already matches requested shadow fork height %d (%s); trusted startup cut has no inherited blocks to skip on this run\n",
             __func__, requested_height, target->GetBlockHash().ToString());
         return true;
     }
 
     CValidationState state;
+    if (fTrustedStartupCut) {
+        const auto restore_loaded_tip = [&]() {
+            if (g_shadowfork_lazy_block_index.enabled) {
+                chainActive.SetTipWindow(loaded_tip, old_window_start_height);
+            } else {
+                chainActive.SetTip(loaded_tip);
+            }
+        };
+        const uint256 target_hash = target->GetBlockHash();
+        const bool fCoinsAlreadyAtTarget = old_coins_best == target_hash;
+        const bool fCoinsAtLoadedTip = old_coins_best == loaded_hash;
+        if (!fCoinsAlreadyAtTarget && !fCoinsAtLoadedTip) {
+            return error("%s: trusted shadow fork cut requires coins best to match either loaded source tip %s or requested target %s, got %s",
+                __func__, loaded_hash.ToString(), target_hash.ToString(), old_coins_best.ToString());
+        }
+        if (fTrustedStartupCutDatadir && loaded_height > requested_height) {
+            if (!chainActive.Contains(target)) {
+                return error("%s: trusted shadow fork datadir is already marked but loaded active chain does not contain requested height %d",
+                    __func__, requested_height);
+            }
+            pindexBestHeader = loaded_tip;
+            const size_t removed_above_cut = RemoveLoadedBlockIndexEntriesAboveHeight(target->nHeight, true);
+            if (fCoinsAlreadyAtTarget) {
+                if (g_shadowfork_lazy_block_index.enabled) {
+                    chainActive.SetTipWindow(target, target->nHeight);
+                    g_shadowfork_lazy_block_index.active_tip_height = target->nHeight;
+                    g_shadowfork_lazy_block_index.eager_base_height = target->nHeight;
+                } else {
+                    chainActive.SetTip(target);
+                }
+            }
+            setBlockIndexCandidates.clear();
+            setBlockIndexCandidates.insert(loaded_tip);
+            mempool.AddTransactionsUpdated(1);
+            cvBlockChange.notify_all();
+            LogPrintf("%s: trusted shadow fork startup cut was already applied at height=%d; keeping loaded above-cut candidate height=%d hash=%s with coins best %s and removed %u non-active above-cut block index entries\n",
+                __func__, target->nHeight, loaded_tip->nHeight, loaded_hash.ToString(),
+                old_coins_best.ToString(),
+                static_cast<unsigned int>(removed_above_cut));
+            return true;
+        }
+
+        LogPrintf("WARNING: %s: applying trusted shadow fork startup cut from height=%d hash=%s to height=%d hash=%s without disconnecting %d inherited source blocks; the persisted chainstate best-block marker will point at the fork height while UTXO contents remain trusted prepared-volume test state reflecting creates/spends from source-chain blocks above the cut. Do not use this mode on nodes connected to real networks.\n",
+            __func__, loaded_height, loaded_hash.ToString(), target->nHeight,
+            target_hash.ToString(), loaded_height - target->nHeight);
+
+        if (g_shadowfork_lazy_block_index.enabled) {
+            chainActive.SetTipWindow(target, target->nHeight);
+        } else {
+            // Without the lazy snapshot loader, ancestor lookups below the cut
+            // must remain backed by the eagerly populated in-memory chain.
+            chainActive.SetTip(target);
+        }
+        bool fWroteMarkersThisRun = false;
+        if (!fTrustedStartupCutDatadir) {
+            const bool fWroteHeight = pblocktree->WriteFlagInt(SHADOWFORK_TRUSTED_STARTUP_CUT_HEIGHT_FLAG, target->nHeight, true);
+            const bool fWroteMarker = fWroteHeight && pblocktree->WriteFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG, true, true);
+            fWroteMarkersThisRun = fWroteHeight && fWroteMarker;
+            if (!fWroteMarkersThisRun) {
+                const bool fErasedHeight = pblocktree->EraseFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_HEIGHT_FLAG, true);
+                const bool fErasedMarker = pblocktree->EraseFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG, true);
+                restore_loaded_tip();
+                return error("%s: failed to mark datadir as using trusted shadow fork startup cut%s%s",
+                    __func__,
+                    fErasedHeight ? "" : "; also failed to erase partial trusted-cut height marker",
+                    fErasedMarker ? "" : "; also failed to erase partial trusted-cut active marker");
+            }
+        }
+        if (!fCoinsAlreadyAtTarget) {
+            pcoinsTip->SetBestBlock(target_hash);
+        }
+        if (!FlushStateToDisk(state, FLUSH_STATE_ALWAYS)) {
+            bool fCleanupOk = true;
+            if (!fCoinsAlreadyAtTarget) {
+                pcoinsTip->SetBestBlock(old_coins_best);
+            }
+            if (fWroteMarkersThisRun) {
+                const bool fErasedHeight = pblocktree->EraseFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_HEIGHT_FLAG, true);
+                const bool fErasedMarker = pblocktree->EraseFlag(SHADOWFORK_TRUSTED_STARTUP_CUT_FLAG, true);
+                fCleanupOk = fErasedHeight && fErasedMarker;
+                if (!fCleanupOk) {
+                    LogPrintf("%s: failed to fully erase trusted shadow fork startup-cut markers after chainstate flush failure; erased_height=%d erased_marker=%d; datadir may fail closed on the next start\n",
+                        __func__, fErasedHeight ? 1 : 0, fErasedMarker ? 1 : 0);
+                } else {
+                    LogPrintf("%s: erased trusted shadow fork startup-cut markers after chainstate flush failure\n",
+                        __func__);
+                }
+            }
+            restore_loaded_tip();
+            return error("%s: failed to flush trusted shadow fork chainstate marker after startup cut%s",
+                __func__, fCleanupOk ? "" : "; marker cleanup also failed and the datadir may fail closed on the next start");
+        }
+
+        pindexBestHeader = target;
+        if (g_shadowfork_lazy_block_index.enabled) {
+            g_shadowfork_lazy_block_index.active_tip_height = target->nHeight;
+            g_shadowfork_lazy_block_index.eager_base_height = target->nHeight;
+        }
+        const size_t removed_above_cut = RemoveLoadedBlockIndexEntriesAboveHeight(target->nHeight);
+
+        setBlockIndexCandidates.clear();
+        setBlockIndexCandidates.insert(target);
+        // The trusted path intentionally skips DisconnectTip's transaction
+        // removal signals and mempool resurrection because the prepared-volume
+        // UTXO set is accepted as authoritative synthetic shadowfork state.
+        mempool.clear();
+        mempool.AddTransactionsUpdated(1);
+        cvBlockChange.notify_all();
+
+        LogPrintf("%s: trusted shadow fork startup cut complete; coins best now at %s (was %s); removed %u loaded above-cut block index entries\n",
+            __func__, pcoinsTip->GetBestBlock().ToString(), old_coins_best.ToString(),
+            static_cast<unsigned int>(removed_above_cut));
+        return true;
+    }
+
     int disconnected = 0;
     while (chainActive.Height() > requested_height) {
         if (!DisconnectTip(state, chainparams, true)) {

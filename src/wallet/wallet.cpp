@@ -63,6 +63,11 @@ static bool IsShadowForkMemoryOnlyWallet()
         GetBoolArg("-shadowforkmemoryonlywallet", false);
 }
 
+bool CWallet::IsShadowForkMemoryOnly() const
+{
+    return IsShadowForkMemoryOnlyWallet();
+}
+
 /**
  * Fees smaller than this (in satoshi) are considered zero fee (for transaction creation)
  * Override with -mintxfee
@@ -178,7 +183,7 @@ void CWallet::DeriveNewChildKey(CKeyMetadata& metadata, CKey& secret)
     secret = childKey.key;
 
     // update the chain model in the database
-    if (!CWalletDB(strWalletFile).WriteHDChain(hdChain))
+    if (!IsShadowForkMemoryOnlyWallet() && !CWalletDB(strWalletFile).WriteHDChain(hdChain))
         throw std::runtime_error(std::string(__func__) + ": Writing HD chain model failed");
 }
 
@@ -197,7 +202,7 @@ bool CWallet::AddKeyPubKey(const CKey& secret, const CPubKey &pubkey)
     if (HaveWatchOnly(script))
         RemoveWatchOnly(script);
 
-    if (!fFileBacked)
+    if (!fFileBacked || IsShadowForkMemoryOnlyWallet())
         return true;
     if (!IsCrypted()) {
         return CWalletDB(strWalletFile).WriteKey(pubkey,
@@ -212,7 +217,7 @@ bool CWallet::AddCryptedKey(const CPubKey &vchPubKey,
 {
     if (!CCryptoKeyStore::AddCryptedKey(vchPubKey, vchCryptedSecret))
         return false;
-    if (!fFileBacked)
+    if (!fFileBacked || IsShadowForkMemoryOnlyWallet())
         return true;
     {
         LOCK(cs_wallet);
@@ -257,7 +262,7 @@ bool CWallet::AddCScript(const CScript& redeemScript)
 {
     if (!CCryptoKeyStore::AddCScript(redeemScript))
         return false;
-    if (!fFileBacked)
+    if (!fFileBacked || IsShadowForkMemoryOnlyWallet())
         return true;
     return CWalletDB(strWalletFile).WriteCScript(Hash160(redeemScript), redeemScript);
 }
@@ -308,7 +313,7 @@ bool CWallet::RemoveWatchOnly(const CScript &dest)
         return false;
     if (!HaveWatchOnly())
         NotifyWatchonlyChanged(false);
-    if (fFileBacked)
+    if (fFileBacked && !IsShadowForkMemoryOnlyWallet())
         if (!CWalletDB(strWalletFile).EraseWatchOnly(dest))
             return false;
 
@@ -342,6 +347,12 @@ bool CWallet::Unlock(const SecureString& strWalletPassphrase)
 
 bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase)
 {
+    if (IsShadowForkMemoryOnlyWallet()) {
+        LogPrintf("%s: refusing to persist wallet passphrase change for memory-only wallet\n",
+            __func__);
+        return false;
+    }
+
     bool fWasLocked = IsLocked();
 
     {
@@ -388,6 +399,11 @@ bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase,
 
 void CWallet::SetBestChain(const CBlockLocator& loc)
 {
+    if (IsShadowForkMemoryOnlyWallet()) {
+        LogPrintf("%s: shadow fork mode: updated best block locator in memory without wallet DB write\n",
+            __func__);
+        return;
+    }
     CWalletDB walletdb(strWalletFile);
     walletdb.WriteBestBlock(loc);
 }
@@ -407,7 +423,7 @@ bool CWallet::SetMinVersion(enum WalletFeature nVersion, CWalletDB* pwalletdbIn,
     if (nVersion > nWalletMaxVersion)
         nWalletMaxVersion = nVersion;
 
-    if (fFileBacked)
+    if (fFileBacked && !IsShadowForkMemoryOnlyWallet())
     {
         CWalletDB* pwalletdb = pwalletdbIn ? pwalletdbIn : new CWalletDB(strWalletFile);
         if (nWalletVersion > 40000)
@@ -610,6 +626,12 @@ void CWallet::AddToSpends(const uint256& wtxid)
 
 bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
 {
+    if (IsShadowForkMemoryOnlyWallet()) {
+        LogPrintf("%s: refusing to encrypt memory-only wallet because encrypted keys and master keys would require wallet DB writes\n",
+            __func__);
+        return false;
+    }
+
     if (IsCrypted())
         return false;
 
@@ -711,6 +733,7 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
 DBErrors CWallet::ReorderTransactions()
 {
     LOCK(cs_wallet);
+    const bool fMemoryOnly = IsShadowForkMemoryOnlyWallet();
     CWalletDB walletdb(strWalletFile);
 
     // Old wallets didn't have any defined order for transactions
@@ -748,11 +771,11 @@ DBErrors CWallet::ReorderTransactions()
 
             if (pwtx)
             {
-                if (!walletdb.WriteTx(*pwtx))
+                if (!fMemoryOnly && !walletdb.WriteTx(*pwtx))
                     return DB_LOAD_FAIL;
             }
             else
-                if (!walletdb.WriteAccountingEntry(pacentry->nEntryNo, *pacentry))
+                if (!fMemoryOnly && !walletdb.WriteAccountingEntry(pacentry->nEntryNo, *pacentry))
                     return DB_LOAD_FAIL;
         }
         else
@@ -772,15 +795,16 @@ DBErrors CWallet::ReorderTransactions()
             // Since we're changing the order, write it back
             if (pwtx)
             {
-                if (!walletdb.WriteTx(*pwtx))
+                if (!fMemoryOnly && !walletdb.WriteTx(*pwtx))
                     return DB_LOAD_FAIL;
             }
             else
-                if (!walletdb.WriteAccountingEntry(pacentry->nEntryNo, *pacentry))
+                if (!fMemoryOnly && !walletdb.WriteAccountingEntry(pacentry->nEntryNo, *pacentry))
                     return DB_LOAD_FAIL;
         }
     }
-    walletdb.WriteOrderPosNext(nOrderPosNext);
+    if (!fMemoryOnly)
+        walletdb.WriteOrderPosNext(nOrderPosNext);
 
     return DB_LOAD_OK;
 }
@@ -801,33 +825,36 @@ int64_t CWallet::IncOrderPosNext(CWalletDB *pwalletdb)
 
 bool CWallet::AccountMove(std::string strFrom, std::string strTo, CAmount nAmount, std::string strComment)
 {
-    CWalletDB walletdb(strWalletFile);
-    if (!walletdb.TxnBegin())
+    const bool fMemoryOnly = IsShadowForkMemoryOnlyWallet();
+    std::unique_ptr<CWalletDB> walletdb;
+    if (!fMemoryOnly)
+        walletdb.reset(new CWalletDB(strWalletFile));
+    if (walletdb && !walletdb->TxnBegin())
         return false;
 
     int64_t nNow = GetAdjustedTime();
 
     // Debit
     CAccountingEntry debit;
-    debit.nOrderPos = IncOrderPosNext(&walletdb);
+    debit.nOrderPos = IncOrderPosNext(walletdb.get());
     debit.strAccount = strFrom;
     debit.nCreditDebit = -nAmount;
     debit.nTime = nNow;
     debit.strOtherAccount = strTo;
     debit.strComment = strComment;
-    AddAccountingEntry(debit, &walletdb);
+    AddAccountingEntry(debit, walletdb.get());
 
     // Credit
     CAccountingEntry credit;
-    credit.nOrderPos = IncOrderPosNext(&walletdb);
+    credit.nOrderPos = IncOrderPosNext(walletdb.get());
     credit.strAccount = strTo;
     credit.nCreditDebit = nAmount;
     credit.nTime = nNow;
     credit.strOtherAccount = strFrom;
     credit.strComment = strComment;
-    AddAccountingEntry(credit, &walletdb);
+    AddAccountingEntry(credit, walletdb.get());
 
-    if (!walletdb.TxnCommit())
+    if (walletdb && !walletdb->TxnCommit())
         return false;
 
     return true;
@@ -863,7 +890,8 @@ bool CWallet::GetAccountPubkey(CPubKey &pubKey, std::string strAccount, bool bFo
             return false;
 
         SetAddressBook(account.vchPubKey.GetID(), strAccount, "receive");
-        walletdb.WriteAccount(strAccount, account);
+        if (!IsShadowForkMemoryOnlyWallet())
+            walletdb.WriteAccount(strAccount, account);
     }
 
     pubKey = account.vchPubKey;
@@ -896,10 +924,11 @@ bool CWallet::MarkReplaced(const uint256& originalHash, const uint256& newHash)
 
     wtx.mapValue["replaced_by_txid"] = newHash.ToString();
 
-    CWalletDB walletdb(strWalletFile, "r+");
-
     bool success = true;
-    if (!walletdb.WriteTx(wtx)) {
+    if (IsShadowForkMemoryOnlyWallet()) {
+        LogPrintf("%s: shadow fork mode: marked wallet tx %s replaced in memory without wallet DB write\n",
+            __func__, wtx.GetHash().ToString());
+    } else if (!CWalletDB(strWalletFile, "r+").WriteTx(wtx)) {
         LogPrintf("%s: Updating walletdb tx %s failed", __func__, wtx.GetHash().ToString());
         success = false;
     }
@@ -1124,7 +1153,10 @@ bool CWallet::AbandonTransaction(const uint256& hashTx)
 {
     LOCK2(cs_main, cs_wallet);
 
-    CWalletDB walletdb(strWalletFile, "r+");
+    const bool fMemoryOnly = IsShadowForkMemoryOnlyWallet();
+    std::unique_ptr<CWalletDB> walletdb;
+    if (!fMemoryOnly)
+        walletdb.reset(new CWalletDB(strWalletFile, "r+"));
 
     std::set<uint256> todo;
     std::set<uint256> done;
@@ -1154,7 +1186,12 @@ bool CWallet::AbandonTransaction(const uint256& hashTx)
             wtx.nIndex = -1;
             wtx.setAbandoned();
             wtx.MarkDirty();
-            walletdb.WriteTx(wtx);
+            if (walletdb) {
+                walletdb->WriteTx(wtx);
+            } else {
+                LogPrintf("%s: shadow fork mode: marked wallet tx %s abandoned in memory without wallet DB write\n",
+                    __func__, wtx.GetHash().ToString());
+            }
             NotifyTransactionChanged(this, wtx.GetHash(), CT_UPDATED);
             // Iterate over all its outputs, and mark transactions in the wallet that spend them abandoned too
             TxSpends::const_iterator iter = mapTxSpends.lower_bound(COutPoint(hashTx, 0));
@@ -1194,7 +1231,10 @@ void CWallet::MarkConflicted(const uint256& hashBlock, const uint256& hashTx)
         return;
 
     // Do not flush the wallet here for performance reasons
-    CWalletDB walletdb(strWalletFile, "r+", false);
+    const bool fMemoryOnly = IsShadowForkMemoryOnlyWallet();
+    std::unique_ptr<CWalletDB> walletdb;
+    if (!fMemoryOnly)
+        walletdb.reset(new CWalletDB(strWalletFile, "r+", false));
 
     std::set<uint256> todo;
     std::set<uint256> done;
@@ -1214,7 +1254,12 @@ void CWallet::MarkConflicted(const uint256& hashBlock, const uint256& hashTx)
             wtx.nIndex = -1;
             wtx.hashBlock = hashBlock;
             wtx.MarkDirty();
-            walletdb.WriteTx(wtx);
+            if (walletdb) {
+                walletdb->WriteTx(wtx);
+            } else {
+                LogPrintf("%s: shadow fork mode: marked wallet tx %s conflicted in memory without wallet DB write\n",
+                    __func__, wtx.GetHash().ToString());
+            }
             // Iterate over all its outputs, and mark transactions in the wallet that spend them conflicted too
             TxSpends::const_iterator iter = mapTxSpends.lower_bound(COutPoint(now, 0));
             while (iter != mapTxSpends.end() && iter->first.hash == now) {
@@ -1446,7 +1491,7 @@ bool CWallet::SetHDMasterKey(const CPubKey& pubkey)
 bool CWallet::SetHDChain(const CHDChain& chain, bool memonly)
 {
     LOCK(cs_wallet);
-    if (!memonly && !CWalletDB(strWalletFile).WriteHDChain(chain))
+    if (!memonly && !IsShadowForkMemoryOnlyWallet() && !CWalletDB(strWalletFile).WriteHDChain(chain))
         throw runtime_error(std::string(__func__) + ": writing chain failed");
 
     hdChain = chain;
@@ -2908,14 +2953,17 @@ void CWallet::ListAccountCreditDebit(const std::string& strAccount, std::list<CA
 
 bool CWallet::AddAccountingEntry(const CAccountingEntry& acentry)
 {
-    CWalletDB walletdb(strWalletFile);
+    std::unique_ptr<CWalletDB> walletdb;
+    if (!IsShadowForkMemoryOnlyWallet())
+        walletdb.reset(new CWalletDB(strWalletFile));
 
-    return AddAccountingEntry(acentry, &walletdb);
+    return AddAccountingEntry(acentry, walletdb.get());
 }
 
 bool CWallet::AddAccountingEntry(const CAccountingEntry& acentry, CWalletDB *pwalletdb)
 {
-    if (!pwalletdb->WriteAccountingEntry_Backend(acentry))
+    if (!IsShadowForkMemoryOnlyWallet() &&
+        (!pwalletdb || !pwalletdb->WriteAccountingEntry_Backend(acentry)))
         return false;
 
     laccentries.push_back(acentry);
@@ -3101,7 +3149,7 @@ bool CWallet::DelAddressBook(const CTxDestination& address)
     {
         LOCK(cs_wallet); // mapAddressBook
 
-        if(fFileBacked)
+        if(fFileBacked && !IsShadowForkMemoryOnlyWallet())
         {
             // Delete destdata tuples associated with address
             std::string strAddress = CBitcoinAddress(address).ToString();
@@ -3115,6 +3163,8 @@ bool CWallet::DelAddressBook(const CTxDestination& address)
 
     NotifyAddressBookChanged(this, address, "", ::IsMine(*this, address) != ISMINE_NO, "", CT_DELETED);
 
+    if (IsShadowForkMemoryOnlyWallet())
+        return true;
     if (!fFileBacked)
         return false;
     CWalletDB(strWalletFile).ErasePurpose(CBitcoinAddress(address).ToString());
@@ -3123,7 +3173,7 @@ bool CWallet::DelAddressBook(const CTxDestination& address)
 
 bool CWallet::SetDefaultKey(const CPubKey &vchPubKey)
 {
-    if (fFileBacked)
+    if (fFileBacked && !IsShadowForkMemoryOnlyWallet())
     {
         if (!CWalletDB(strWalletFile).WriteDefaultKey(vchPubKey))
             return false;
@@ -3140,6 +3190,14 @@ bool CWallet::NewKeyPool()
 {
     {
         LOCK(cs_wallet);
+        if (IsShadowForkMemoryOnlyWallet()) {
+            setKeyPool.clear();
+            const bool locked = IsLocked();
+            LogPrintf("CWallet::NewKeyPool using on-demand memory-only keys%s\n",
+                locked ? " (wallet locked)" : "");
+            return true;
+        }
+
         CWalletDB walletdb(strWalletFile);
         BOOST_FOREACH(int64_t nIndex, setKeyPool)
             walletdb.ErasePool(nIndex);
@@ -3164,6 +3222,13 @@ bool CWallet::TopUpKeyPool(unsigned int kpSize)
 {
     {
         LOCK(cs_wallet);
+
+        if (IsShadowForkMemoryOnlyWallet()) {
+            const bool locked = IsLocked();
+            LogPrintf("CWallet::TopUpKeyPool skipped for memory-only wallet%s\n",
+                locked ? " (wallet locked)" : "");
+            return true;
+        }
 
         if (IsLocked())
             return false;
@@ -3193,10 +3258,21 @@ bool CWallet::TopUpKeyPool(unsigned int kpSize)
 
 void CWallet::ReserveKeyFromKeyPool(int64_t& nIndex, CKeyPool& keypool)
 {
-    nIndex = -1;
+    nIndex = KEYPOOL_INVALID_INDEX;
     keypool.vchPubKey = CPubKey();
     {
         LOCK(cs_wallet);
+
+        if (IsShadowForkMemoryOnlyWallet()) {
+            if (IsLocked()) {
+                LogPrintf("keypool reserve memory-only failed: wallet locked\n");
+                return;
+            }
+            keypool = CKeyPool(GenerateNewKey());
+            nIndex = KEYPOOL_MEMORY_ONLY_INDEX;
+            LogPrintf("keypool reserve memory-only\n");
+            return;
+        }
 
         if (!IsLocked())
             TopUpKeyPool();
@@ -3220,6 +3296,10 @@ void CWallet::ReserveKeyFromKeyPool(int64_t& nIndex, CKeyPool& keypool)
 
 void CWallet::KeepKey(int64_t nIndex)
 {
+    if (IsShadowForkMemoryOnlyWallet()) {
+        return;
+    }
+
     // Remove from key pool
     if (fFileBacked)
     {
@@ -3231,6 +3311,10 @@ void CWallet::KeepKey(int64_t nIndex)
 
 void CWallet::ReturnKey(int64_t nIndex)
 {
+    if (IsShadowForkMemoryOnlyWallet()) {
+        return;
+    }
+
     // Return to key pool
     {
         LOCK(cs_wallet);
@@ -3246,9 +3330,9 @@ bool CWallet::GetKeyFromPool(CPubKey& result)
     {
         LOCK(cs_wallet);
         ReserveKeyFromKeyPool(nIndex, keypool);
-        if (nIndex == -1)
+        if (nIndex == KEYPOOL_INVALID_INDEX)
         {
-            if (IsLocked()) return false;
+            if (IsLocked() || IsShadowForkMemoryOnlyWallet()) return false;
             result = GenerateNewKey();
             return true;
         }
@@ -3456,11 +3540,11 @@ std::set<CTxDestination> CWallet::GetAccountAddresses(const std::string& strAcco
 
 bool CReserveKey::GetReservedKey(CPubKey& pubkey)
 {
-    if (nIndex == -1)
+    if (nIndex == CWallet::KEYPOOL_INVALID_INDEX)
     {
         CKeyPool keypool;
         pwallet->ReserveKeyFromKeyPool(nIndex, keypool);
-        if (nIndex != -1)
+        if (nIndex != CWallet::KEYPOOL_INVALID_INDEX)
             vchPubKey = keypool.vchPubKey;
         else {
             return false;
@@ -3473,17 +3557,17 @@ bool CReserveKey::GetReservedKey(CPubKey& pubkey)
 
 void CReserveKey::KeepKey()
 {
-    if (nIndex != -1)
+    if (nIndex != CWallet::KEYPOOL_INVALID_INDEX)
         pwallet->KeepKey(nIndex);
-    nIndex = -1;
+    nIndex = CWallet::KEYPOOL_INVALID_INDEX;
     vchPubKey = CPubKey();
 }
 
 void CReserveKey::ReturnKey()
 {
-    if (nIndex != -1)
+    if (nIndex != CWallet::KEYPOOL_INVALID_INDEX)
         pwallet->ReturnKey(nIndex);
-    nIndex = -1;
+    nIndex = CWallet::KEYPOOL_INVALID_INDEX;
     vchPubKey = CPubKey();
 }
 
@@ -3659,7 +3743,7 @@ bool CWallet::AddDestData(const CTxDestination &dest, const std::string &key, co
         return false;
 
     mapAddressBook[dest].destdata.insert(std::make_pair(key, value));
-    if (!fFileBacked)
+    if (!fFileBacked || IsShadowForkMemoryOnlyWallet())
         return true;
     return CWalletDB(strWalletFile).WriteDestData(CBitcoinAddress(dest).ToString(), key, value);
 }
@@ -3668,7 +3752,7 @@ bool CWallet::EraseDestData(const CTxDestination &dest, const std::string &key)
 {
     if (!mapAddressBook[dest].destdata.erase(key))
         return false;
-    if (!fFileBacked)
+    if (!fFileBacked || IsShadowForkMemoryOnlyWallet())
         return true;
     return CWalletDB(strWalletFile).EraseDestData(CBitcoinAddress(dest).ToString(), key);
 }
@@ -3927,7 +4011,8 @@ CWallet* CWallet::CreateWalletFromFile(const std::string walletFile)
                     copyTo->fFromMe = copyFrom->fFromMe;
                     copyTo->strFromAccount = copyFrom->strFromAccount;
                     copyTo->nOrderPos = copyFrom->nOrderPos;
-                    walletdb.WriteTx(*copyTo);
+                    if (!walletInstance->IsShadowForkMemoryOnly())
+                        walletdb.WriteTx(*copyTo);
                 }
             }
         }

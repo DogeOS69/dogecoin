@@ -165,15 +165,42 @@ bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<uint256, CDiskTxPos>
     return WriteBatch(batch);
 }
 
-bool CBlockTreeDB::WriteFlag(const std::string &name, bool fValue) {
-    return Write(std::make_pair(DB_FLAG, name), fValue ? '1' : '0');
+bool CBlockTreeDB::WriteFlag(const std::string &name, bool fValue, bool fSync) {
+    return Write(std::make_pair(DB_FLAG, name), fValue ? '1' : '0', fSync);
 }
 
 bool CBlockTreeDB::ReadFlag(const std::string &name, bool &fValue) {
     char ch;
     if (!Read(std::make_pair(DB_FLAG, name), ch))
         return false;
-    fValue = ch == '1';
+    // WriteFlag stores single-byte ASCII booleans; any other value means the
+    // marker is corrupted and callers should fail closed.
+    if (ch == '1') {
+        fValue = true;
+        return true;
+    }
+    if (ch == '0') {
+        fValue = false;
+        return true;
+    }
+    return false;
+}
+
+bool CBlockTreeDB::ExistsFlag(const std::string &name) {
+    return Exists(std::make_pair(DB_FLAG, name));
+}
+
+bool CBlockTreeDB::EraseFlag(const std::string &name, bool fSync) {
+    return Erase(std::make_pair(DB_FLAG, name), fSync);
+}
+
+bool CBlockTreeDB::WriteFlagInt(const std::string &name, int nValue, bool fSync) {
+    return Write(std::make_pair(DB_FLAG, name), nValue, fSync);
+}
+
+bool CBlockTreeDB::ReadFlagInt(const std::string &name, int &nValue) {
+    if (!Read(std::make_pair(DB_FLAG, name), nValue))
+        return false;
     return true;
 }
 
