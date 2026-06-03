@@ -3318,7 +3318,7 @@ bool ContextualCheckBlock(const CBlock& block, CValidationState& state, const CB
     //   {0xaa, 0x21, 0xa9, 0xed}, and the following 32 bytes are SHA256^2(witness root, witness nonce). In case there are
     //   multiple, the last one is used.
     bool fHaveWitness = false;
-    if (VersionBitsState(pindexPrev, consensusParams, Consensus::DEPLOYMENT_SEGWIT, versionbitscache) == THRESHOLD_ACTIVE) {
+    if (IsWitnessEnabled(pindexPrev, consensusParams)) {
         int commitpos = GetWitnessCommitmentIndex(block);
         if (commitpos != -1) {
             bool malleated = false;
@@ -5051,14 +5051,14 @@ bool BuildShadowForkBlockIndexSnapshot(const CChainParams& chainparams)
     LOCK(cs_main);
 
     if (chainparams.GetConsensus(0).fShadowForkMode) {
-        return error("%s: shadowfork snapshots must be built from a source main/test datadir", __func__);
+        return error("%s: shadowfork snapshots must be built from a source main/test/regtest datadir", __func__);
     }
     if (chainActive.Tip() == NULL) {
         return error("%s: chainActive tip is null", __func__);
     }
 
     const std::string source_chain = GetShadowForkSnapshotSourceChain(chainparams);
-    if (source_chain != "main" && source_chain != "test") {
+    if (source_chain != "main" && source_chain != "test" && source_chain != "regtest") {
         return error("%s: unsupported shadowfork snapshot source chain %s", __func__, source_chain);
     }
 

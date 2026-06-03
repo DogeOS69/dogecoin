@@ -476,7 +476,7 @@ std::string HelpMessage(HelpMessageMode mode)
         strUsage += HelpMessageGroup(_("Shadow fork options (dev/testing):"));
         strUsage += HelpMessageOpt("-buildshadowforksnapshot", _("Build or refresh the global shadow fork block-index snapshot from the current source datadir and exit"));
         strUsage += HelpMessageOpt("-shadowfork=<height>", _("Enable shadow fork mode, forking from the specified block height"));
-        strUsage += HelpMessageOpt("-shadowforkchain=<chain>", _("Source chain to fork from: main or test (default: main)"));
+        strUsage += HelpMessageOpt("-shadowforkchain=<chain>", _("Source chain to fork from: main, test, or regtest (default: main)"));
         strUsage += HelpMessageOpt("-shadowforkmaturity=<n>", strprintf(_("Coinbase maturity for shadow fork (default: %d)"), 1));
         strUsage += HelpMessageOpt("-shadowforkfastblockindexcandidates", _("In shadow fork mode, populate block index candidates from the active tip only during startup (default: 1)"));
         strUsage += HelpMessageOpt("-shadowforkdeferchainstateflush", _("In shadow fork mode, defer automatic IF_NEEDED/PERIODIC chainstate flushes; clean shutdown still flushes (default: 1)"));
@@ -918,12 +918,12 @@ bool AppInitParameterInteraction()
 
     if (GetBoolArg("-buildshadowforksnapshot", false)) {
         if (chainparams.GetConsensus(0).fShadowForkMode) {
-            return InitError(_("Shadow fork snapshots must be built from a source main/test datadir, not from a shadow fork datadir."));
+            return InitError(_("Shadow fork snapshots must be built from a source main/test/regtest datadir, not from a shadow fork datadir."));
         }
 
         const std::string network_id = chainparams.NetworkIDString();
-        if (network_id != "main" && network_id != "test") {
-            return InitError(_("Shadow fork snapshots can only be built from main or test source datadirs."));
+        if (network_id != "main" && network_id != "test" && network_id != "regtest") {
+            return InitError(_("Shadow fork snapshots can only be built from main, test, or regtest source datadirs."));
         }
 
         if (GetBoolArg("-reindex", false) || GetBoolArg("-reindex-chainstate", false)) {
