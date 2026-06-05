@@ -35,6 +35,14 @@ needed:
 Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.11.sdk
 ```
 
+Compatibility note for future agents: the deterministic macOS build uses this
+older `MacOSX10.11.sdk`, so do not assume headers from newer native macOS SDKs
+exist in CI. In particular, keep `src/crypto/scrypt.{h,cpp}` on its
+scrypt-private endian helpers instead of adding `__APPLE__` guards that include
+`<sys/endian.h>` or depending on generic `le32dec`/`le32enc` names. When
+changing platform guards, verify both a native macOS compile and the
+deterministic/cross-build SDK path.
+
 Unfortunately, the usual linux tools (7zip, hpmount, loopback mount) are incapable of opening this file.
 To create a tarball suitable for Gitian input, there are two options:
 
